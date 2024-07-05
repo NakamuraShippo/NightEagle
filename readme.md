@@ -1,4 +1,4 @@
-
+![My animation](./images/NightEagleDemo.gif)
  # NightEagle -NovelAI to Eagle-
 
 NightEagleは、NovelAIで生成された画像を自動的にEagleに転送するChrome拡張機能です。
