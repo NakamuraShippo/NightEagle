@@ -3,42 +3,72 @@ console.log("NightEagle: Background script loaded");
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log("NightEagle: Message received in background script", request);
   if (request.action === "sendToEagle") {
-    handleSendToEagle(request, sender).then(sendResponse);
+    handleSendToEagle(request, sender)
+      .then(result => {
+        if (chrome.runtime.lastError) {
+          console.warn("NightEagle: Message port closed before sending response");
+        } else {
+          console.log("NightEagle: Sending response", result);
+          sendResponse(result);
+        }
+      })
+      .catch(error => {
+        if (chrome.runtime.lastError) {
+          console.warn("NightEagle: Message port closed before sending error response");
+        } else {
+          console.error("NightEagle: Error in handleSendToEagle", error);
+          sendResponse({ success: false, error: error.message });
+        }
+      });
     return true;  // 非同期レスポンスを示す
   } else if (request.action === "testEagleConnection") {
-    handleTestEagleConnection(request).then(sendResponse);
+    handleTestEagleConnection(request)
+      .then(result => {
+        if (chrome.runtime.lastError) {
+          console.warn("NightEagle: Message port closed before sending response");
+        } else {
+          console.log("NightEagle: Sending response", result);
+          sendResponse(result);
+        }
+      })
+      .catch(error => {
+        if (chrome.runtime.lastError) {
+          console.warn("NightEagle: Message port closed before sending error response");
+        } else {
+          console.error("NightEagle: Error in handleTestEagleConnection", error);
+          sendResponse({ success: false, error: error.message });
+        }
+      });
     return true;  // 非同期レスポンスを示す
   }
 });
 
 async function handleSendToEagle(request, sender) {
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error("Operation timed out")), 25000)
+  );
+
   try {
     const result = await Promise.race([
       fetchBlobAndSendToEagle(request.imageData, request.imageName, request.parameters, sender.tab.id),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Operation timed out")), 25000))
+      timeoutPromise
     ]);
     console.log("NightEagle: sendImageToEagle success", result);
-    return {success: true, result: result};
+    return { success: true, result: result };
   } catch (error) {
     console.error("NightEagle: Error in sendImageToEagle:", error);
-    return {success: false, error: error.message, details: error.stack};
+    return { success: false, error: error.message, details: error.stack };
   }
 }
 
-async function handleTestEagleConnection(request) {
-  try {
-    const result = await testEagleConnection(request.endpoint);
-    console.log("NightEagle: testEagleConnection success", result);
-    return {success: true, result: result};
-  } catch (error) {
-    console.error("NightEagle: Error in testEagleConnection:", error);
-    return {success: false, error: error.message, details: error.stack};
-  }
-}
 
-async function fetchBlobAndSendToEagle(blobUrl, imageName, parameters, tabId) {
+async function fetchBlobAndSendToEagle(imageData, imageName, parameters, tabId) {
+  console.log("NightEagle: Fetching blob and sending to Eagle", { imageData, imageName, parameters, tabId });
   try {
-    const response = await fetch(blobUrl);
+    const response = await fetch(imageData);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
     const blob = await response.blob();
     const base64data = await blobToBase64(blob);
     return await sendImageToEagle(base64data, imageName, parameters, tabId);
@@ -58,7 +88,7 @@ function blobToBase64(blob) {
 }
 
 async function sendImageToEagle(imageData, imageName, parameters, tabId) {
-  console.log("NightEagle: Sending image to Eagle with parameters", parameters);
+  console.log("NightEagle: Sending image to Eagle", { imageName, parameters, tabId });
   try {
     const settings = await chrome.storage.sync.get(['eagleEndpoint']);
     const eagleEndpoint = settings.eagleEndpoint || "http://localhost:41595/api/item/addFromURL";
@@ -103,7 +133,25 @@ async function sendImageToEagle(imageData, imageName, parameters, tabId) {
   } catch (error) {
     console.error('NightEagle: Error sending image to Eagle:', error);
     chrome.tabs.sendMessage(tabId, {action: "notifyError", message: "Failed to send image to Eagle. Please check your settings and Eagle application."});
-    throw new Error(`Failed to send image to Eagle: ${error.message}`);
+    throw error;
+  }
+}
+
+async function handleTestEagleConnection(request) {
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error("Connection test timed out")), 10000)
+  );
+
+  try {
+    const result = await Promise.race([
+      testEagleConnection(request.endpoint),
+      timeoutPromise
+    ]);
+    console.log("NightEagle: testEagleConnection success", result);
+    return { success: true, result: result };
+  } catch (error) {
+    console.error("NightEagle: Error in testEagleConnection:", error);
+    return { success: false, error: error.message, details: error.stack };
   }
 }
 
