@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NightEagle -NovelAI to Eagle-</title>
+  <style>
+    body { width: 300px; padding: 10px; font-family: Arial, sans-serif; }
+    h1 { font-size: 18px; }
+    label, input { display: block; margin-bottom: 10px; }
+    input[type="text"] { width: 100%; }
+    #status { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>NightEagle -NovelAI to Eagle-</h1>
+  <p>Status: <span id="status">Checking...</span></p>
+  <form id="settingsForm">
+    <label for="eagleEndpoint">Eagle API Endpoint:</label>
+    <input type="text" id="eagleEndpoint" name="eagleEndpoint">
+    <button type="submit">Save Settings</button>
+  </form>
+  <script src="popup.js"></script>
+</body>
+</html>
