@@ -53,23 +53,24 @@ function getImageParameters() {
 function getPromptText(type) {
   const selectors = [
     `textarea[placeholder="${type === 'positive' ? 'プロンプトを入力し、理想の画像を生成しましょう' : '除外したい要素を入力してください'}"]`,
-    `textarea[placeholder="${type === 'positive' ? 'Enter your prompt here' : 'Enter symbols to exclude'}"]`,
-    `.sc-a2d0901c-45.kyIdtk`  // クラス名による汎用的なセレクタ
+    `textarea[placeholder="${type === 'positive' ? 'Enter your prompt here' : 'Enter symbols to exclude'}"]`
   ];
 
   let promptElement;
   for (const selector of selectors) {
     promptElement = document.querySelector(selector);
-    if (promptElement) break;
+    if (promptElement) {
+      debugLog(`Found ${type} prompt element with selector: ${selector}`, promptElement);
+      break;
+    }
   }
 
   if (promptElement) {
-    console.log(`NightEagle: Found ${type} prompt element`, promptElement);
     return promptElement.value;
   }
 
-  console.warn(`NightEagle: ${type} prompt element not found`);
-  console.log("NightEagle: Available textarea elements:", document.querySelectorAll('textarea'));
+  debugLog(`${type} prompt element not found`);
+  debugLog("Available textarea elements:", document.querySelectorAll('textarea'));
   return '';
 }
 
