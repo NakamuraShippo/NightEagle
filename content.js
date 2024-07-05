@@ -28,14 +28,17 @@ function observeNovelAI() {
 }
 
 function getImageParameters() {
-  const positivePrompt = document.querySelector('textarea[placeholder="プロンプトを入力し、理想の画像を生成しましょう"]').value;
-  const negativePrompt = document.querySelector('textarea[placeholder="除外したい要素を入力してください"]').value;
+  const positivePrompt = getPromptText('positive');
+  const negativePrompt = getPromptText('negative');
   const steps = document.querySelector('.sc-c87c6dcc-9.fUNIFR input[type="number"]').value;
   const cfg = document.querySelectorAll('.sc-c87c6dcc-9.fUNIFR input[type="number"]')[1].value;
-  // シード値の取得方法を変更
+  
   const seedElement = document.querySelector('.sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child');
   const seed = seedElement ? seedElement.textContent : 'N/A';
+  
   const sampler = document.querySelector('.sc-a2d0901c-15.gfkdYu .css-4t5j3y-singleValue').textContent;
+
+  console.log("NightEagle: Gathered image parameters", { positivePrompt, negativePrompt, steps, cfg, seed, sampler });
 
   return {
     positivePrompt,
@@ -45,6 +48,29 @@ function getImageParameters() {
     seed,
     sampler
   };
+}
+
+function getPromptText(type) {
+  const selectors = [
+    `textarea[placeholder="${type === 'positive' ? 'プロンプトを入力し、理想の画像を生成しましょう' : '除外したい要素を入力してください'}"]`,
+    `textarea[placeholder="${type === 'positive' ? 'Enter your prompt here' : 'Enter symbols to exclude'}"]`,
+    `.sc-a2d0901c-45.kyIdtk`  // クラス名による汎用的なセレクタ
+  ];
+
+  let promptElement;
+  for (const selector of selectors) {
+    promptElement = document.querySelector(selector);
+    if (promptElement) break;
+  }
+
+  if (promptElement) {
+    console.log(`NightEagle: Found ${type} prompt element`, promptElement);
+    return promptElement.value;
+  }
+
+  console.warn(`NightEagle: ${type} prompt element not found`);
+  console.log("NightEagle: Available textarea elements:", document.querySelectorAll('textarea'));
+  return '';
 }
 
 function processImage(imgNode) {
