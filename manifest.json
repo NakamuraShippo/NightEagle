@@ -1,18 +1,20 @@
 {
   "manifest_version": 3,
   "name": "NightEagle -NovelAI to Eagle-",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Automatically transfer generated images from NovelAI to Eagle",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "https://novelai.net/*",
     "http://localhost:41595/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -24,8 +26,8 @@
     "default_popup": "popup.html"
   },
   "icons": {
-    "16": "icon16.png",
-    "48": "icon48.png",
-    "128": "icon128.png"
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }

@@ -1,81 +1,63 @@
-console.log("NightEagle: Background script loaded");
+// background.js
+console.log("NightEagle: Background script starting");
+
+import { EagleService } from '/services/eagle-service.js';
+import { TaskManager } from '/services/task-manager.js';
+
+console.log("NightEagle: Modules imported in background");
+
+const eagleService = new EagleService();
+const taskManager = new TaskManager();
+
+console.log("NightEagle: Background script initialized");
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log("NightEagle: Message received in background script", request);
-  if (request.action === "sendToEagle") {
-    handleSendToEagle(request, sender)
-      .then(result => {
-        if (chrome.runtime.lastError) {
-          console.warn("NightEagle: Message port closed before sending response");
-        } else {
-          console.log("NightEagle: Sending response", result);
-          sendResponse(result);
-        }
-      })
-      .catch(error => {
-        if (chrome.runtime.lastError) {
-          console.warn("NightEagle: Message port closed before sending error response");
-        } else {
-          console.error("NightEagle: Error in handleSendToEagle", error);
-          sendResponse({ success: false, error: error.message });
-        }
-      });
-    return true;  // 非同期レスポンスを示す
-  } else if (request.action === "testEagleConnection") {
-    handleTestEagleConnection(request)
-      .then(result => {
-        if (chrome.runtime.lastError) {
-          console.warn("NightEagle: Message port closed before sending response");
-        } else {
-          console.log("NightEagle: Sending response", result);
-          sendResponse(result);
-        }
-      })
-      .catch(error => {
-        if (chrome.runtime.lastError) {
-          console.warn("NightEagle: Message port closed before sending error response");
-        } else {
-          console.error("NightEagle: Error in handleTestEagleConnection", error);
-          sendResponse({ success: false, error: error.message });
-        }
-      });
-    return true;  // 非同期レスポンスを示す
+  console.log("NightEagle: Received message in background script", request);
+  if (request.action === "startImageTransfer") {
+    const taskId = taskManager.createTask();
+    console.log(`NightEagle: Created new task ${taskId} for image transfer`);
+    sendResponse({ taskId });
+    handleImageTransfer(request.imageData, request.imageName, request.parameters, taskId, sender.tab.id);
+    return true;
+  } else if (request.action === "getTaskStatus") {
+    const status = taskManager.getTaskStatus(request.taskId);
+    console.log(`NightEagle: Task ${request.taskId} status:`, status);
+    sendResponse(status);
+    return true;
   }
 });
 
-async function handleSendToEagle(request, sender) {
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error("Operation timed out")), 25000)
-  );
-
+async function handleImageTransfer(imageData, imageName, parameters, taskId, tabId) {
+  console.log(`NightEagle: Starting image transfer for task ${taskId}`);
   try {
-    const result = await Promise.race([
-      fetchBlobAndSendToEagle(request.imageData, request.imageName, request.parameters, sender.tab.id),
-      timeoutPromise
-    ]);
-    console.log("NightEagle: sendImageToEagle success", result);
-    return { success: true, result: result };
+    taskManager.updateTaskStatus(taskId, 'fetching', 10);
+    console.log(`NightEagle: Fetching blob for task ${taskId}`);
+    const blob = await fetchBlob(imageData);
+
+    taskManager.updateTaskStatus(taskId, 'converting', 30);
+    console.log(`NightEagle: Converting blob to base64 for task ${taskId}`);
+    const base64data = await blobToBase64(blob);
+
+    taskManager.updateTaskStatus(taskId, 'sending', 50);
+    console.log(`NightEagle: Sending image to Eagle for task ${taskId}`);
+    await eagleService.sendImageToEagle(base64data, imageName, parameters);
+
+    taskManager.updateTaskStatus(taskId, 'completed', 100);
+    console.log(`NightEagle: Image transfer completed for task ${taskId}`);
+    chrome.tabs.sendMessage(tabId, { action: "transferComplete", taskId });
   } catch (error) {
-    console.error("NightEagle: Error in sendImageToEagle:", error);
-    return { success: false, error: error.message, details: error.stack };
+    console.error(`NightEagle: Image transfer failed for task ${taskId}:`, error);
+    taskManager.updateTaskStatus(taskId, 'error', 0, error.message);
+    chrome.tabs.sendMessage(tabId, { action: "transferError", taskId, error: error.message });
   }
 }
 
-
-async function fetchBlobAndSendToEagle(imageData, imageName, parameters, tabId) {
-  console.log("NightEagle: Fetching blob and sending to Eagle", { imageData, imageName, parameters, tabId });
-  try {
-    const response = await fetch(imageData);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const blob = await response.blob();
-    const base64data = await blobToBase64(blob);
-    return await sendImageToEagle(base64data, imageName, parameters, tabId);
-  } catch (error) {
-    console.error("NightEagle: Error fetching blob:", error);
-    throw error;
+async function fetchBlob(imageData) {
+  const response = await fetch(imageData);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
+  return await response.blob();
 }
 
 function blobToBase64(blob) {
@@ -87,89 +69,4 @@ function blobToBase64(blob) {
   });
 }
 
-async function sendImageToEagle(imageData, imageName, parameters, tabId) {
-  console.log("NightEagle: Sending image to Eagle", { imageName, parameters, tabId });
-  try {
-    const settings = await chrome.storage.sync.get(['eagleEndpoint']);
-    const eagleEndpoint = settings.eagleEndpoint || "http://localhost:41595/api/item/addFromURL";
-
-    const memo = `Positive Prompt:\n${parameters.positivePrompt}\n\n` +
-                  `Negative Prompt:\n${parameters.negativePrompt}\n\n` +
-                  `Steps: ${parameters.steps}\n` +
-                  `CFG: ${parameters.cfg}\n` +
-                  `Seed: ${parameters.seed}\n` +
-                  `Sampler: ${parameters.sampler}`;
-
-    console.log("NightEagle: Generated memo", memo);
-    console.log("NightEagle: Eagle endpoint", eagleEndpoint);
-
-    const response = await fetch(eagleEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url: imageData,
-        name: imageName,
-        website: "https://novelai.net/",
-        annotation: memo,
-        tags: ["NovelAI", "AI Generated"],
-        folder: ""
-      })
-    });
-
-    console.log("NightEagle: Eagle API response", response);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}, statusText: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    console.log('NightEagle: Image successfully sent to Eagle:', result);
-
-    chrome.tabs.sendMessage(tabId, {action: "notifySuccess", message: "Image sent to Eagle successfully!"});
-
-    return result;
-  } catch (error) {
-    console.error('NightEagle: Error sending image to Eagle:', error);
-    chrome.tabs.sendMessage(tabId, {action: "notifyError", message: "Failed to send image to Eagle. Please check your settings and Eagle application."});
-    throw error;
-  }
-}
-
-async function handleTestEagleConnection(request) {
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error("Connection test timed out")), 10000)
-  );
-
-  try {
-    const result = await Promise.race([
-      testEagleConnection(request.endpoint),
-      timeoutPromise
-    ]);
-    console.log("NightEagle: testEagleConnection success", result);
-    return { success: true, result: result };
-  } catch (error) {
-    console.error("NightEagle: Error in testEagleConnection:", error);
-    return { success: false, error: error.message, details: error.stack };
-  }
-}
-
-async function testEagleConnection(endpoint) {
-  console.log("NightEagle: Testing Eagle connection to", endpoint);
-  try {
-    const response = await fetch(endpoint, {
-      method: 'GET'
-    });
-    console.log("NightEagle: Eagle connection test response", response);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return await response.text();
-  } catch (error) {
-    console.error('NightEagle: Error testing Eagle connection:', error);
-    throw new Error(`Failed to connect to Eagle: ${error.message}`);
-  }
-}
-
-console.log("NightEagle: Background script fully loaded");
+console.log("NightEagle: Background script setup complete");
