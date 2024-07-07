@@ -1,8 +1,7 @@
-// background.js
 console.log("NightEagle: Background script starting");
 
-import { EagleService } from '/services/eagle-service.js';
-import { TaskManager } from '/services/task-manager.js';
+import { EagleService } from './services/eagle-service.js';
+import { TaskManager } from './services/task-manager.js';
 
 console.log("NightEagle: Modules imported in background");
 
@@ -40,7 +39,12 @@ async function handleImageTransfer(imageData, imageName, parameters, taskId, tab
 
     taskManager.updateTaskStatus(taskId, 'sending', 50);
     console.log(`NightEagle: Sending image to Eagle for task ${taskId}`);
-    await eagleService.sendImageToEagle(base64data, imageName, parameters);
+    
+    // すべてのタグを取得
+    const { allTags } = await chrome.storage.sync.get(['allTags']);
+    const tags = allTags ? allTags.split(',').map(tag => tag.trim()) : ["NovelAI", "AI Generated"];
+    
+    await eagleService.sendImageToEagle(base64data, imageName, parameters, tags);
 
     taskManager.updateTaskStatus(taskId, 'completed', 100);
     console.log(`NightEagle: Image transfer completed for task ${taskId}`);

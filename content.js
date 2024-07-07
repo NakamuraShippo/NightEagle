@@ -64,7 +64,7 @@ class ParameterExtractor {
     const selector = type === 'positive' 
       ? 'textarea[placeholder="プロンプトを入力し、理想の画像を生成しましょう"]'
       : 'textarea[placeholder="除外したい要素を入力してください"]';
-    
+
     const element = document.querySelector(selector);
     return element ? element.value : '';
   }
@@ -75,25 +75,31 @@ const parameterExtractor = new ParameterExtractor();
 
 console.log("NightEagle: Content script initialized");
 
-imageDetector.onNewImage((imgNode) => {
-  console.log("NightEagle: New image detected", imgNode.src);
-  const parameters = parameterExtractor.extractParameters();
-  console.log("NightEagle: Extracted parameters", parameters);
+function handleNewImage(imgNode) {
+  try {
+    console.log("NightEagle: New image detected", imgNode.src);
+    const parameters = parameterExtractor.extractParameters();
+    console.log("NightEagle: Extracted parameters", parameters);
 
-  chrome.runtime.sendMessage({
-    action: "startImageTransfer",
-    imageData: imgNode.src,
-    imageName: `NovelAI_${new Date().toISOString()}.png`,
-    parameters: parameters
-  }, response => {
-    if (chrome.runtime.lastError) {
-      console.error("NightEagle: Error starting image transfer:", chrome.runtime.lastError);
-    } else {
-      console.log("NightEagle: Image transfer started", response);
-      pollTaskStatus(response.taskId);
-    }
-  });
-});
+    chrome.runtime.sendMessage({
+      action: "startImageTransfer",
+      imageData: imgNode.src,
+      imageName: `NovelAI_${new Date().toISOString()}.png`,
+      parameters: parameters
+    }, response => {
+      if (chrome.runtime.lastError) {
+        console.error("NightEagle: Error starting image transfer:", chrome.runtime.lastError);
+      } else {
+        console.log("NightEagle: Image transfer started", response);
+        pollTaskStatus(response.taskId);
+      }
+    });
+  } catch (error) {
+    console.error("NightEagle: Error handling new image:", error);
+  }
+}
+
+imageDetector.onNewImage(handleNewImage);
 
 function pollTaskStatus(taskId) {
   console.log("NightEagle: Starting to poll task status for", taskId);
@@ -122,6 +128,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.error(`NightEagle: Image transfer failed for task ${message.taskId}:`, message.error);
     // Notify user of transfer failure
   }
+});
+
+window.addEventListener('unload', () => {
+  console.log("NightEagle: Content script unloading");
+  // ここで必要なクリーンアップ処理を行う
 });
 
 console.log("NightEagle: Content script setup complete");
