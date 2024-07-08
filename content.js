@@ -81,42 +81,61 @@ function handleNewImage(imgNode) {
     const parameters = parameterExtractor.extractParameters();
     console.log("NightEagle: Extracted parameters", parameters);
 
-    chrome.runtime.sendMessage({
+    sendMessageToBackground({
       action: "startImageTransfer",
       imageData: imgNode.src,
       imageName: `NovelAI_${new Date().toISOString()}.png`,
       parameters: parameters
-    }, response => {
-      if (chrome.runtime.lastError) {
-        console.error("NightEagle: Error starting image transfer:", chrome.runtime.lastError);
-      } else {
-        console.log("NightEagle: Image transfer started", response);
-        pollTaskStatus(response.taskId);
-      }
     });
   } catch (error) {
     console.error("NightEagle: Error handling new image:", error);
+    // エラーが発生しても処理を継続
   }
 }
 
-imageDetector.onNewImage(handleNewImage);
-
-function pollTaskStatus(taskId) {
-  console.log("NightEagle: Starting to poll task status for", taskId);
-  const intervalId = setInterval(() => {
-    chrome.runtime.sendMessage({ action: "getTaskStatus", taskId }, response => {
+function sendMessageToBackground(message) {
+  try {
+    chrome.runtime.sendMessage(message, response => {
       if (chrome.runtime.lastError) {
-        console.error("NightEagle: Error checking task status:", chrome.runtime.lastError);
-        clearInterval(intervalId);
+        console.error("NightEagle: Error sending message to background:", chrome.runtime.lastError);
       } else {
-        console.log(`NightEagle: Task ${taskId} status:`, response);
-        if (response.status === 'completed' || response.status === 'error') {
-          console.log(`NightEagle: Task ${taskId} finished with status: ${response.status}`);
-          clearInterval(intervalId);
+        console.log("NightEagle: Image transfer started", response);
+        if (response && response.taskId) {
+          pollTaskStatus(response.taskId);
         }
       }
     });
+  } catch (error) {
+    console.error("NightEagle: Error in sendMessageToBackground:", error);
+  }
+}
+
+function pollTaskStatus(taskId) {
+  const intervalId = setInterval(() => {
+    try {
+      chrome.runtime.sendMessage({ action: "getTaskStatus", taskId }, response => {
+        if (chrome.runtime.lastError) {
+          console.error("NightEagle: Error checking task status:", chrome.runtime.lastError);
+          clearInterval(intervalId);
+        } else {
+          console.log(`NightEagle: Task ${taskId} status:`, response);
+          if (response.status === 'completed' || response.status === 'error') {
+            console.log(`NightEagle: Task ${taskId} finished with status: ${response.status}`);
+            clearInterval(intervalId);
+          }
+        }
+      });
+    } catch (error) {
+      console.error("NightEagle: Error in pollTaskStatus:", error);
+      clearInterval(intervalId);
+    }
   }, 1000);
+}
+
+try {
+  imageDetector.onNewImage(handleNewImage);
+} catch (error) {
+  console.error("NightEagle: Error setting up image detector:", error);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -128,11 +147,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.error(`NightEagle: Image transfer failed for task ${message.taskId}:`, message.error);
     // Notify user of transfer failure
   }
-});
-
-window.addEventListener('unload', () => {
-  console.log("NightEagle: Content script unloading");
-  // ここで必要なクリーンアップ処理を行う
 });
 
 console.log("NightEagle: Content script setup complete");

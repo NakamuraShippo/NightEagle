@@ -5,21 +5,21 @@ export class ImageDetector {
       this.callbacks = [];
       console.log("NightEagle: ImageDetector constructed");
     }
-  
+
     onNewImage(callback) {
       this.callbacks.push(callback);
       if (!this.observer) {
         this.startObserving();
       }
     }
-  
+
     startObserving() {
       console.log("NightEagle: Starting image observation");
       const config = { childList: true, subtree: true, attributes: true };
       this.observer = new MutationObserver(this.checkForNewImages.bind(this));
       this.observer.observe(document.body, config);
     }
-  
+
     checkForNewImages(mutations) {
       console.log("NightEagle: Checking for new images");
       for (let mutation of mutations) {

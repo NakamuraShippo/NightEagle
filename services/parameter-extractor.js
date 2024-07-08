@@ -80,14 +80,14 @@ export class ParameterExtractor {
         this.debugLog('Failed to find CFG element');
         return 'N/A';
     }
-  
+
     getSeed() {
       const selectors = [
         '.sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child',
         '.seed-value',
         'button:contains("Seed")'
       ];
-  
+
       for (const selector of selectors) {
         const element = document.querySelector(selector);
         if (element) {
@@ -95,7 +95,7 @@ export class ParameterExtractor {
           return element.textContent;
         }
       }
-  
+
       // フォールバック: ページ内のテキストからシード値を探す
       const pageText = document.body.innerText;
       const seedMatch = pageText.match(/Seed:\s*(\d+)/);
@@ -103,18 +103,18 @@ export class ParameterExtractor {
         this.debugLog('Found seed using regex');
         return seedMatch[1];
       }
-  
+
       this.debugLog('Failed to find seed element');
       return 'N/A';
     }
-  
+
     getSampler() {
       const selectors = [
         '.sc-a2d0901c-15.gfkdYu .css-4t5j3y-singleValue',
         'select[aria-label="Sampler"]',
         '.sampler-select'
     ];
-  
+
       for (const selector of selectors) {
         const element = document.querySelector(selector);
         if (element) {
@@ -122,7 +122,7 @@ export class ParameterExtractor {
           return element.textContent || element.value;
         }
       }
-  
+
       // フォールバック: ページ内のテキストからサンプラー名を探す
       const pageText = document.body.innerText;
       const samplerMatch = pageText.match(/Sampler:\s*(\w+)/);
@@ -130,11 +130,11 @@ export class ParameterExtractor {
         this.debugLog('Found sampler using regex');
         return samplerMatch[1];
       }
-  
+
       this.debugLog('Failed to find sampler element');
       return 'N/A';
     }
-  
+
     debugLog(...args) {
       if (this.debugMode) {
         console.log('ParameterExtractor:', ...args);

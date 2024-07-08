@@ -4,21 +4,20 @@
   <title>NightEagle Settings</title>
   <style>
     body { width: 300px; padding: 10px; font-family: Arial, sans-serif; }
-    label, input, textarea { display: block; margin-bottom: 10px; }
-    input[type="text"], textarea { width: 100%; }
+    label, select, textarea { display: block; margin-bottom: 10px; width: 100%; }
   </style>
 </head>
 <body>
   <h1>NightEagle Settings</h1>
-  <form id="settingsForm">
-    <label for="eagleEndpoint">Eagle API Endpoint:</label>
-    <input type="text" id="eagleEndpoint" name="eagleEndpoint">
 
-    <label for="allTags">All Tags (comma-separated):</label>
-    <textarea id="allTags" name="allTags" rows="5"></textarea>
+  <label for="eagleFolder">Eagle Folder:</label>
+  <select id="eagleFolder" name="eagleFolder"></select>
 
-    <button type="submit">Save</button>
-  </form>
+  <label for="allTags">All Tags (comma-separated):</label>
+  <textarea id="allTags" name="allTags" rows="5"></textarea>
+
+  <div id="status"></div>
+
   <script src="popup.js"></script>
 </body>
 </html>
