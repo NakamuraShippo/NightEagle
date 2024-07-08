@@ -1,5 +1,17 @@
 console.log("NightEagle: Content script starting");
 
+let imageDetector;
+let parameterExtractor;
+
+function initializeExtension() {
+  imageDetector = new ImageDetector();
+  parameterExtractor = new ParameterExtractor();
+
+  imageDetector.onNewImage(handleNewImage);
+
+  console.log("NightEagle: Content script initialized");
+}
+
 // ImageDetector class
 class ImageDetector {
   constructor() {
@@ -70,11 +82,6 @@ class ParameterExtractor {
   }
 }
 
-const imageDetector = new ImageDetector();
-const parameterExtractor = new ParameterExtractor();
-
-console.log("NightEagle: Content script initialized");
-
 function handleNewImage(imgNode) {
   try {
     console.log("NightEagle: New image detected", imgNode.src);
@@ -89,25 +96,35 @@ function handleNewImage(imgNode) {
     });
   } catch (error) {
     console.error("NightEagle: Error handling new image:", error);
-    // エラーが発生しても処理を継続
+    if (error.message.includes("Extension context invalidated")) {
+      reinitializeExtension();
+    }
   }
 }
 
 function sendMessageToBackground(message) {
-  try {
-    chrome.runtime.sendMessage(message, response => {
-      if (chrome.runtime.lastError) {
-        console.error("NightEagle: Error sending message to background:", chrome.runtime.lastError);
-      } else {
-        console.log("NightEagle: Image transfer started", response);
-        if (response && response.taskId) {
-          pollTaskStatus(response.taskId);
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(message, response => {
+        if (chrome.runtime.lastError) {
+          console.error("NightEagle: Error sending message to background:", chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else {
+          console.log("NightEagle: Image transfer started", response);
+          if (response && response.taskId) {
+            pollTaskStatus(response.taskId);
+          }
+          resolve(response);
         }
+      });
+    } catch (error) {
+      console.error("NightEagle: Error in sendMessageToBackground:", error);
+      if (error.message.includes("Extension context invalidated")) {
+        reinitializeExtension();
       }
-    });
-  } catch (error) {
-    console.error("NightEagle: Error in sendMessageToBackground:", error);
-  }
+      reject(error);
+    }
+  });
 }
 
 function pollTaskStatus(taskId) {
@@ -127,15 +144,17 @@ function pollTaskStatus(taskId) {
       });
     } catch (error) {
       console.error("NightEagle: Error in pollTaskStatus:", error);
+      if (error.message.includes("Extension context invalidated")) {
+        reinitializeExtension();
+      }
       clearInterval(intervalId);
     }
   }, 1000);
 }
 
-try {
-  imageDetector.onNewImage(handleNewImage);
-} catch (error) {
-  console.error("NightEagle: Error setting up image detector:", error);
+function reinitializeExtension() {
+  console.log("NightEagle: Reinitializing extension");
+  initializeExtension();
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -148,5 +167,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Notify user of transfer failure
   }
 });
+
+initializeExtension();
 
 console.log("NightEagle: Content script setup complete");
