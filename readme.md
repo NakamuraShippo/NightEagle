@@ -57,4 +57,5 @@ NightEagleは、NovelAIで生成された画像を自動的にEagleに転送す�
 
 ## アップデート予定
 - NAIのページがアプデした際に対処しやすくなるようにセレクターをjsonで管理
-- ブラウザ版niji/mid版の制作(未定)
+- ブラウザ版niji/mid向け(未定)
+- ComfyUI版 (未定)
