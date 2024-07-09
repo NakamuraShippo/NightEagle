@@ -22,6 +22,7 @@ NightEagleは、NovelAIで生成された画像を自動的にEagleに転送す�
 
 1. このリポジトリをクローンまたはダウンロードします。
    - ダウンロードした場合はzipファイルを解凍します。
+   - ![My animation](./images/NightEagledownload.gif)
 3. Chromeブラウザを開き、`chrome://extensions` にアクセスします。
 4. 右上の「デベロッパーモード」をオンにします。
 5. 「パッケージ化されていない拡張機能を読み込む」をクリックします。
