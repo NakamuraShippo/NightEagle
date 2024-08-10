@@ -1,0 +1,29 @@
+{
+  "version": "1.2",
+  "selectors": {
+    "imageContainer": "img[src^='blob:']",
+    "positivePrompt": "textarea[placeholder='プロンプトを入力し、理想の画像を生成しましょう'], textarea[placeholder='Enter your prompt here']",
+    "negativePrompt": "textarea[placeholder='除外したい要素を入力してください'], textarea[placeholder='Enter symbols to exclude']",
+    "steps": ".sc-c87c6dcc-9.fUNIFR input[type='number'], input[aria-label='Steps']",
+    "cfg": ".sc-c87c6dcc-9.fUNIFR input[type='number']:nth-child(2), input[aria-label='CFG Scale']",
+    "seed": ".sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child, [aria-label='Seed'] input",
+    "sampler": ".sc-a2d0901c-15.gfkdYu .css-4t5j3y-singleValue, select[aria-label='Sampler']"
+  },
+  "imageDetection": {
+    "attribute": "src",
+    "valueStartsWith": "blob:"
+  },
+  "defaultValues": {
+    "steps": "N/A",
+    "cfg": "N/A",
+    "seed": "N/A",
+    "sampler": "N/A"
+  },
+  "observerConfig": {
+    "childList": true,
+    "subtree": true,
+    "attributes": true,
+    "attributeFilter": ["src"]
+  },
+  "updateInterval": 86400000
+}
