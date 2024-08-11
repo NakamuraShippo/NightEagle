@@ -6,7 +6,7 @@
     "negativePrompt": "textarea[placeholder='除外したい要素を入力してください'], textarea[placeholder='Enter symbols to exclude']",
     "steps": ".sc-c87c6dcc-9.fUNIFR input[type='number'], input[aria-label='Steps']",
     "cfg": ".sc-c87c6dcc-9.fUNIFR input[type='number']:nth-child(2), input[aria-label='CFG Scale']",
-    "seed": ".sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child, [aria-label='Seed'] input,
+    "seed": ".sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child, [aria-label='Seed'] input",
     "sampler": ".sc-d72450af-1.kXFbYD .css-4t5j3y-singleValue, select[aria-label='Sampler']"
   },
   "imageDetection": {
