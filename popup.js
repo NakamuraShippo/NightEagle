@@ -1,109 +1,78 @@
-let debounceTimer;
+document.addEventListener('DOMContentLoaded', function() {
+  const eagleFolderSelect = document.getElementById('eagleFolder');
+  const allTagsTextarea = document.getElementById('allTags');
+  const statusDiv = document.getElementById('status');
+  const showDebugLogsButton = document.getElementById('showDebugLogs');
 
-function debounce(func, delay) {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(func, delay);
-}
-
-function saveSettings() {
-  const eagleFolder = document.getElementById('eagleFolder').value;
-  const allTags = document.getElementById('allTags').value;
-
-  chrome.storage.sync.set({
-    eagleFolder: eagleFolder,
-    allTags: allTags
-  }, function() {
-    console.log('Settings saved');
-    document.getElementById('status').textContent = 'Settings saved';
-    setTimeout(() => { document.getElementById('status').textContent = ''; }, 2000);
-  });
-}
-
-function loadSettings() {
+  // Load settings
   chrome.storage.sync.get(['eagleFolder', 'allTags'], function(result) {
-    document.getElementById('allTags').value = result.allTags || '';
-    loadFolders(result.eagleFolder);
-  });
-}
-
-function loadFolders(selectedFolderId) {
-  console.log("Requesting folders from:", EAGLE_API_ENDPOINT);
-
-  chrome.runtime.sendMessage({ action: "getFolders", eagleEndpoint: EAGLE_API_ENDPOINT }, response => {
-    if (response.success) {
-      console.log("Folder list response:", response.folders);
-      const folderSelect = document.getElementById('eagleFolder');
-      folderSelect.innerHTML = '';
-      addFoldersToSelect(response.folders, folderSelect, selectedFolderId);
-    } else {
-      console.error('Error loading folders:', response.error);
-      document.getElementById('status').textContent = 'Error loading folders: ' + response.error;
+    if (result.eagleFolder) {
+      eagleFolderSelect.value = result.eagleFolder;
+    }
+    if (result.allTags) {
+      allTagsTextarea.value = result.allTags;
     }
   });
-}
 
-function addFoldersToSelect(folders, select, selectedFolderId) {
-  const folderString = JSON.stringify(folders);
-  let depth = 0;
-  let currentDepth = 0;
+  // Save settings
+  function saveSettings() {
+    chrome.storage.sync.set({
+      eagleFolder: eagleFolderSelect.value,
+      allTags: allTagsTextarea.value
+    }, function() {
+      showToast('Settings saved');
+    });
+  }
 
-  for (let i = 0; i < folderString.length; i++) {
-    if (folderString[i] === '{') {
-      depth++;
-    } else if (folderString[i] === '}') {
-      depth--;
-    }
+  eagleFolderSelect.addEventListener('change', saveSettings);
+  allTagsTextarea.addEventListener('input', saveSettings);
 
-    if (folderString.substr(i, 7) === '"name":') {
-      const nameStart = folderString.indexOf('"', i + 7) + 1;
-      const nameEnd = folderString.indexOf('"', nameStart);
-      const name = folderString.substring(nameStart, nameEnd);
+  // Load Eagle folders
+  function loadEagleFolders() {
+    fetch('http://localhost:41595/api/folder/list')
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'success') {
+          populateFolderSelect(data.data);
+        } else {
+          showToast('Failed to load Eagle folders');
+        }
+      })
+      .catch(error => {
+        showToast('Error loading Eagle folders');
+        console.error('Error:', error);
+      });
+  }
 
-      const idStart = folderString.lastIndexOf('"id":', i) + 6;
-      const idEnd = folderString.indexOf(',', idStart);
-      const id = folderString.substring(idStart, idEnd).replace(/"/g, '');
-
+  function populateFolderSelect(folders, prefix = '') {
+    folders.forEach(folder => {
       const option = document.createElement('option');
-      option.value = id;
-      option.textContent = '-'.repeat(Math.max(0, depth - 1)) + ' ' + name;
-      option.selected = id === selectedFolderId;
-      select.appendChild(option);
+      option.value = folder.id;
+      option.textContent = prefix + folder.name;
+      eagleFolderSelect.appendChild(option);
 
-      i = nameEnd;
-    }
+      if (folder.children && folder.children.length > 0) {
+        populateFolderSelect(folder.children, prefix + '- ');
+      }
+    });
   }
-}
 
-function detectColorScheme() {
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.body.classList.add('dark-mode');
-    document.body.classList.remove('light-mode');
-  } else {
-    document.body.classList.add('light-mode');
-    document.body.classList.remove('dark-mode');
-  }
-}
+  loadEagleFolders();
 
-function listenForColorSchemeChanges() {
-  window.matchMedia('(prefers-color-scheme: dark)').addListener((e) => {
-    detectColorScheme();
+  // Show debug logs
+  showDebugLogsButton.addEventListener('click', function() {
+    chrome.runtime.sendMessage({action: "getDebugLogs"}, function(response) {
+      console.log("Debug Logs:", response.logs);
+      console.log("Error Logs:", response.errors);
+      showToast('Debug logs printed to console');
+    });
   });
-}
 
-document.addEventListener('DOMContentLoaded', function() {
-  loadSettings();
-  detectColorScheme();
-  listenForColorSchemeChanges();
-
-  document.getElementById('eagleFolder').addEventListener('change', saveSettings);
-  document.getElementById('allTags').addEventListener('input', () => debounce(saveSettings, 500));
+  function showToast(message) {
+    statusDiv.textContent = message;
+    statusDiv.style.opacity = '1';
+    setTimeout(() => {
+      statusDiv.style.opacity = '0';
+    }, 2000);
+  }
 });
-
-document.addEventListener('DOMContentLoaded', function() {
-  loadSettings();
-
-  document.getElementById('eagleFolder').addEventListener('change', saveSettings);
-  document.getElementById('allTags').addEventListener('input', () => debounce(saveSettings, 500));
-});
-
-const EAGLE_API_ENDPOINT = 'http://localhost:41595';

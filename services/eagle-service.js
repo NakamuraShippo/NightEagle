@@ -1,15 +1,17 @@
-// services/eagle-service.js
+class EagleService {
+  constructor(debug) {
+    this.debug = debug;
+  }
 
-const EAGLE_API_ENDPOINT = 'http://localhost:41595';
-
-export class EagleService {
   async sendImageToEagle(imageData, imageName, parameters, tags, folderId) {
+    this.debug.log("Sending image to Eagle", { imageName, folderId, tags });
+
     const memo = `Positive Prompt:\n${parameters.positivePrompt}\n\n` +
-                  `Negative Prompt:\n${parameters.negativePrompt}\n\n` +
-                  `Steps: ${parameters.steps}\n` +
-                  `CFG: ${parameters.cfg}\n` +
-                  `Seed: ${parameters.seed}\n` +
-                  `Sampler: ${parameters.sampler}`;
+                `Negative Prompt:\n${parameters.negativePrompt}\n\n` +
+                `Steps: ${parameters.steps}\n` +
+                `CFG: ${parameters.cfg}\n` +
+                `Seed: ${parameters.seed}\n` +
+                `Sampler: ${parameters.sampler}`;
 
     const requestBody = {
       url: imageData,
@@ -20,34 +22,27 @@ export class EagleService {
       folderId: folderId
     };
 
-    console.log("NightEagle: Sending image to Eagle", { imageName, folderId, tags });
+    try {
+      const response = await fetch("http://localhost:41595/api/item/addFromURL", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
 
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        const response = await fetch(`${EAGLE_API_ENDPOINT}/api/item/addFromURL`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}, statusText: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        console.log("NightEagle: Eagle API response", result);
-        return result;
-      } catch (error) {
-        console.error(`NightEagle: Error sending image to Eagle (attempt ${4 - retries}/3):`, error);
-        retries--;
-        if (retries === 0) {
-          throw error;
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}, statusText: ${response.statusText}`);
       }
+
+      const result = await response.json();
+      this.debug.log("Eagle API response", result);
+      return result;
+    } catch (error) {
+      this.debug.error("Error sending image to Eagle", error);
+      throw error;
     }
   }
 }
+
+self.EagleService = EagleService;

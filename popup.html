@@ -3,60 +3,25 @@
 <head>
   <title>NightEagle Settings</title>
   <style>
-    body {
-      width: 300px;
-      padding: 10px;
-      font-family: Arial, sans-serif;
-      transition: background-color 0.3s, color 0.3s;
-    }
-    label, select, textarea {
-      display: block;
-      margin-bottom: 10px;
-      width: 100%;
-    }
-    #eagleFolder {
-      font-family: monospace;
-    }
-    #eagleFolder option {
-      padding: 2px 4px;
-    }
-
-    /* ライトモードのスタイル */
-    body {
-      background-color: #ffffff;
-      color: #000000;
-    }
-    select, textarea {
-      background-color: #f0f0f0;
-      color: #000000;
-      border: 1px solid #cccccc;
-    }
-
-    /* ダークモードのスタイル */
-    @media (prefers-color-scheme: dark) {
-      body {
-        background-color: #202124;
-        color: #e8eaed;
-      }
-      select, textarea {
-        background-color: #292a2d;
-        color: #e8eaed;
-        border: 1px solid #5f6368;
-      }
-    }
+    body { width: 300px; padding: 10px; font-family: Arial, sans-serif; }
+    label, select, textarea { display: block; margin-bottom: 10px; width: 100%; }
+    #eagleFolder { font-family: monospace; }
+    #eagleFolder option { padding: 2px 4px; }
   </style>
 </head>
 <body>
   <h1>NightEagle Settings</h1>
-
+  
   <label for="eagleFolder">Eagle Folder:</label>
   <select id="eagleFolder" name="eagleFolder"></select>
-
+  
   <label for="allTags">All Tags (comma-separated):</label>
   <textarea id="allTags" name="allTags" rows="5"></textarea>
-
+  
   <div id="status"></div>
-
+  
+  <button id="showDebugLogs">Show Debug Logs</button>
+  
   <script src="popup.js"></script>
 </body>
 </html>
