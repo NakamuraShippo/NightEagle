@@ -1,19 +1,21 @@
 {
-  "version": "1.2",
+  "version": "1.3",
   "selectors": {
     "imageContainer": "img[src^='blob:']",
-    "positivePrompt": "textarea[placeholder='プロンプトを入力し、理想の画像を生成しましょう'], textarea[placeholder='Enter your prompt here']",
-    "negativePrompt": "textarea[placeholder='除外したい要素を入力してください'], textarea[placeholder='Enter symbols to exclude']",
-    "steps": ".sc-c87c6dcc-9.fUNIFR input[type='number'], input[aria-label='Steps']",
-    "cfg": ".sc-c87c6dcc-9.fUNIFR input[type='number']:nth-child(2), input[aria-label='CFG Scale']",
-    "seed": ".sc-d72450af-1.sc-b221f04b-15.kXFbYD.fPwlQS .sc-a2d0901c-54.hCPgld span span:first-child, [aria-label='Seed'] input",
-    "sampler": ".sc-d72450af-1.kXFbYD .css-4t5j3y-singleValue, select[aria-label='Sampler']"
+    "positivePrompt": "div.sc-249c7a4e-45.iNKDqU:nth-of-type(1) div.ProseMirror p",
+    "negativePrompt": "div.sc-249c7a4e-45.iNKDqU:nth-of-type(2) div.ProseMirror p",
+    "steps": "div.sc-b995de7a-9.frBJXL input[step='1']",
+    "cfg": "div.sc-b995de7a-9.frBJXL input[step='0.1']",
+    "seed": "div.sc-249c7a4e-55.hXTjgY span span:first-child",
+    "sampler": "button.sc-4f026a5f-2.iaNkyw span"
   },
   "imageDetection": {
     "attribute": "src",
     "valueStartsWith": "blob:"
   },
   "defaultValues": {
+    "positivePrompt": "",
+    "negativePrompt": "",
     "steps": "N/A",
     "cfg": "N/A",
     "seed": "N/A",
