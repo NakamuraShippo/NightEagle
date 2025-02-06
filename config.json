@@ -6,12 +6,7 @@
     "negativePrompt": "div.sc-249c7a4e-45.iNKDqU:nth-of-type(2) div.ProseMirror p",
     "steps": "div.sc-b995de7a-9.frBJXL input[step='1']",
     "cfg": "div.sc-b995de7a-9.frBJXL input[step='0.1']",
-    "seed": "div.sc-249c7a4e-55.hXTjgY span span:first-child",
-    "sampler": "div.css-4t5j3y-singleValue"
-  },
-  "imageDetection": {
-    "attribute": "src",
-    "valueStartsWith": "blob:"
+    "seed": "div.sc-249c7a4e-55.hXTjgY span span:first-child"
   },
   "defaultValues": {
     "positivePrompt": "",
@@ -19,7 +14,13 @@
     "steps": "N/A",
     "cfg": "N/A",
     "seed": "N/A",
-    "sampler": "N/A"
+    "sampler": "N/A",
+    "promptGuidance": "N/A",
+    "noize": "N/A"
+  },
+  "imageDetection": {
+    "attribute": "src",
+    "valueStartsWith": "blob:"
   },
   "observerConfig": {
     "childList": true,
