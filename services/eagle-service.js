@@ -12,6 +12,7 @@ class EagleService {
                 `CFG: ${parameters.cfg}\n` +
                 `Seed: ${parameters.seed}\n` +
                 `Sampler: ${parameters.sampler}`;
+                
 
     const requestBody = {
       url: imageData,
