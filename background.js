@@ -5,12 +5,16 @@ importScripts('services/eagle-service.js');
 importScripts('services/task-manager.js');
 importScripts('services/image-transfer-service.js');
 importScripts('services/config-manager.js');
+importScripts('services/local-folder-service.js');     // 新規追加
+importScripts('services/prompt-manager.js');            // 新規追加
 
 const debug = new NightEagleDebugger();
 const configManager = new ConfigManager(debug);
 const eagleService = new EagleService(debug);
 const taskManager = new TaskManager(debug);
-const imageTransferService = new ImageTransferService(debug, eagleService, taskManager);
+const localFolderService = new LocalFolderService(debug);
+const promptManager = new PromptManager(debug);
+const imageTransferService = new ImageTransferService(debug, eagleService, taskManager, localFolderService, promptManager);
 
 debug.log("Background script initialized");
 

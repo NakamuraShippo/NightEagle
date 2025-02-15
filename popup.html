@@ -4,23 +4,67 @@
   <title>NightEagle Settings</title>
   <style>
     body { width: 300px; padding: 10px; font-family: Arial, sans-serif; }
-    label, select, textarea { display: block; margin-bottom: 10px; width: 100%; }
-    #eagleFolder { font-family: monospace; }
-    #eagleFolder option { padding: 2px 4px; }
+    label, select, textarea, input[type="text"] { display: block; margin-bottom: 10px; width: 100%; }
+    #eagleFolder, #localFolder { font-family: monospace; }
+    #eagleFolder option, #localFolder option { padding: 2px 4px; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .tab-buttons { margin-bottom: 10px; }
+    .tab-buttons button { margin-right: 5px; }
+    /* インタラクティブなプロンプト編集用スタイル */
+    .prompt-segment {
+      position: relative;
+      display: inline-block;
+      margin-right: 2px;
+      padding: 2px;
+      border: 1px solid transparent;
+    }
+    .prompt-segment:hover { border: 1px dashed #aaa; }
+    .segment-controls {
+      display: none;
+      position: absolute;
+      top: -10px;
+      right: 0;
+      font-size: 10px;
+    }
+    .prompt-segment:hover .segment-controls { display: inline; }
+    .segment-controls button { padding: 0 2px; margin-left: 1px; }
   </style>
 </head>
 <body>
-  <h1>NightEagle Settings</h1>
+  <div class="tab-buttons">
+    <button id="settingsTabBtn">Settings</button>
+    <button id="promptManagerTabBtn">Prompt Manager</button>
+  </div>
   
-  <label for="eagleFolder">Eagle Folder:</label>
-  <select id="eagleFolder" name="eagleFolder"></select>
+  <div id="settingsTab" class="tab active">
+    <h1>NightEagle Settings</h1>
+    <label for="transferTarget">Transfer Target:</label>
+    <select id="transferTarget" name="transferTarget">
+      <option value="eagle">Eagle</option>
+      <option value="local">Local Folder</option>
+    </select>
+    
+    <label for="eagleFolder">Eagle Folder:</label>
+    <select id="eagleFolder" name="eagleFolder"></select>
+    
+    <label for="localFolder">Local Folder (relative path):</label>
+    <input type="text" id="localFolder" name="localFolder" placeholder="e.g., MyImages">
+    
+    <label for="allTags">All Tags (comma-separated):</label>
+    <textarea id="allTags" name="allTags" rows="5"></textarea>
+    
+    <div id="status"></div>
+    
+    <button id="showDebugLogs">Show Debug Logs</button>
+  </div>
   
-  <label for="allTags">All Tags (comma-separated):</label>
-  <textarea id="allTags" name="allTags" rows="5"></textarea>
-  
-  <div id="status"></div>
-  
-  <button id="showDebugLogs">Show Debug Logs</button>
+  <div id="promptManagerTab" class="tab">
+    <h1>Prompt Manager</h1>
+    <div id="promptList"></div>
+    <button id="addPromptBtn">Add New Prompt Record</button>
+    <button id="savePromptsBtn">Save Prompts</button>
+  </div>
   
   <script src="popup.js"></script>
 </body>

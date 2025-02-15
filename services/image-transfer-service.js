@@ -1,8 +1,10 @@
 class ImageTransferService {
-  constructor(debug, eagleService, taskManager) {
+  constructor(debug, eagleService, taskManager, localFolderService, promptManager) {
     this.debug = debug;
     this.eagleService = eagleService;
     this.taskManager = taskManager;
+    this.localFolderService = localFolderService;
+    this.promptManager = promptManager;
   }
 
   async handleImageTransfer(imageData, imageName, parameters, taskId, tabId) {
@@ -16,14 +18,31 @@ class ImageTransferService {
 
       this.taskManager.updateTaskStatus(taskId, 'sending', 50);
       
-      const settings = await chrome.storage.sync.get(['eagleFolder', 'allTags']);
-      const tags = settings.allTags ? settings.allTags.split(',').map(tag => tag.trim()) : ["NovelAI", "AI Generated"];
+      const settings = await chrome.storage.sync.get(['eagleFolder', 'localFolder', 'allTags', 'transferTarget']);
+      const tags = settings.allTags
+        ? settings.allTags.split(',').map(tag => tag.trim())
+        : ["NovelAI", "AI Generated"];
       
-      await this.eagleService.sendImageToEagle(base64data, imageName, parameters, tags, settings.eagleFolder);
+      if (settings.transferTarget === 'local') {
+        await this.localFolderService.saveImageToLocalFolder(base64data, imageName, settings.localFolder);
+      } else {
+        await this.eagleService.sendImageToEagle(base64data, imageName, parameters, tags, settings.eagleFolder);
+      }
 
       this.taskManager.updateTaskStatus(taskId, 'completed', 100);
       chrome.tabs.sendMessage(tabId, { action: "transferComplete", taskId });
       this.debug.endTimer("imageTransfer");
+
+      // 送信完了時に prompt.yaml にレコードを追加
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toTimeString().split(' ')[0];
+      this.promptManager.addPrompt({
+        date: dateStr,
+        time: timeStr,
+        positive: parameters.positivePrompt,
+        negative: parameters.negativePrompt
+      });
     } catch (error) {
       this.debug.error(`Image transfer failed for task ${taskId}`, error);
       this.taskManager.updateTaskStatus(taskId, 'error', 0, error.message);

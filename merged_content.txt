@@ -1,0 +1,1907 @@
+===== FILE_START: background.js =====
+FILE_TYPE: javascript
+console.log("Background script starting");
+
+importScripts('debugger.js');
+importScripts('services/eagle-service.js');
+importScripts('services/task-manager.js');
+importScripts('services/image-transfer-service.js');
+importScripts('services/config-manager.js');
+
+const debug = new NightEagleDebugger();
+const configManager = new ConfigManager(debug);
+const eagleService = new EagleService(debug);
+const taskManager = new TaskManager(debug);
+const imageTransferService = new ImageTransferService(debug, eagleService, taskManager);
+
+debug.log("Background script initialized");
+
+chrome.runtime.onInstalled.addListener(() => {
+  debug.log("Extension installed");
+  configManager.loadConfig();
+});
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  debug.log("Message received in background script", request);
+  
+  if (request.action === "startImageTransfer") {
+    debug.startTimer("imageTransfer");
+    const taskId = taskManager.createTask();
+    sendResponse({ taskId });
+    imageTransferService.handleImageTransfer(request.imageData, request.imageName, request.parameters, taskId, sender.tab.id)
+      .then(() => {
+        debug.log(`Image transfer completed for task ${taskId}`);
+        // タブが存在する場合のみメッセージを送信
+        if (sender.tab) {
+          chrome.tabs.sendMessage(sender.tab.id, { action: "transferComplete", taskId })
+            .catch(error => debug.error(`Error sending transferComplete message: ${error}`));
+        }
+      })
+      .catch((error) => {
+        debug.error(`Image transfer failed for task ${taskId}`, error);
+        // タブが存在する場合のみメッセージを送信
+        if (sender.tab) {
+          chrome.tabs.sendMessage(sender.tab.id, { action: "transferError", taskId, error: error.message })
+            .catch(error => debug.error(`Error sending transferError message: ${error}`));
+        }
+      });
+    return true;
+  } else if (request.action === "getTaskStatus") {
+    const status = taskManager.getTaskStatus(request.taskId);
+    sendResponse(status);
+    return true;
+  } else if (request.action === "getDebugLogs") {
+    sendResponse({ logs: debug.getLogs(), errors: debug.getErrors() });
+    return true;
+  }
+});
+
+function keepAlive() {
+  setInterval(() => {
+    debug.log("Service Worker keepalive ping");
+  }, 20000);
+}
+
+keepAlive();
+
+chrome.runtime.onConnect.addListener(function(port) {
+  if (port.name === "checkStatus") {
+    port.onMessage.addListener(function(msg) {
+      debug.log("Received message from content script", msg);
+      port.postMessage({status: "Service Worker is active"});
+    });
+  }
+});
+
+debug.log("Background script fully loaded");
+===== FILE_END: background.js =====
+
+===== FILE_START: config.json =====
+FILE_TYPE: json
+{
+  "version": "1.3",
+  "selectors": {
+    "imageContainer": "img[src^='blob:']",
+    "positivePrompt": "div.sc-249c7a4e-45.iNKDqU:nth-of-type(1) div.ProseMirror p",
+    "negativePrompt": "div.sc-249c7a4e-45.iNKDqU:nth-of-type(2) div.ProseMirror p",
+    "steps": "div.sc-b995de7a-9.frBJXL input[step='1']",
+    "cfg": "div.sc-b995de7a-9.frBJXL input[step='0.1']",
+    "seed": "div.sc-249c7a4e-55.hXTjgY span span:first-child"
+  },
+  "defaultValues": {
+    "positivePrompt": "",
+    "negativePrompt": "",
+    "steps": "N/A",
+    "cfg": "N/A",
+    "seed": "N/A",
+    "sampler": "N/A",
+    "promptGuidance": "N/A",
+    "noize": "N/A"
+  },
+  "imageDetection": {
+    "attribute": "src",
+    "valueStartsWith": "blob:"
+  },
+  "observerConfig": {
+    "childList": true,
+    "subtree": true,
+    "attributes": true,
+    "attributeFilter": ["src"]
+  },
+  "updateInterval": 86400000
+}
+
+===== FILE_END: config.json =====
+
+===== FILE_START: content.js =====
+FILE_TYPE: javascript
+console.log("NightEagle: Content script starting");
+
+let imageDetector;
+let parameterExtractor;
+
+// let config = null;
+// const CONFIG_URL = 'https://raw.githubusercontent.com/NakamuraShippo/nighteagle/main/config.json';
+
+// async function loadConfig() {
+//   try {
+//     const response = await fetch(CONFIG_URL);
+//     if (!response.ok) {
+//       throw new Error(`HTTP error! status: ${response.status}`);
+//     }
+//     config = await response.json();
+//     console.log("NightEagle: Configuration loaded", config);
+//     initializeAfterConfig();
+//   } catch (error) {
+//     console.error("NightEagle: Error loading configuration", error);
+//   }
+// }
+
+// function initializeAfterConfig() {
+//   imageDetector = new ImageDetector();
+//   parameterExtractor = new ParameterExtractor();
+//   imageDetector.onNewImage(handleNewImage);
+//   console.log("NightEagle: Components initialized with config");
+// }
+
+/* --------------------------------------------------
+ *  2) config.json を使わないなら、ハードコーディングorデフォルトの処理
+ * -------------------------------------------------- */
+function initialize() {
+  imageDetector = new ImageDetector();
+  parameterExtractor = new ParameterExtractor();
+  imageDetector.onNewImage(handleNewImage);
+  console.log("NightEagle: Components initialized (no remote config)");
+}
+
+/**
+ * MutationObserver を使って新しいblob画像を検知する
+ */
+class ImageDetector {
+  constructor() {
+    this.processedImages = new Set();
+    this.callbacks = [];
+    this.startObserving();
+  }
+
+  onNewImage(callback) {
+    this.callbacks.push(callback);
+  }
+
+  startObserving() {
+    console.log("NightEagle: Starting image observation");
+    // blob画像をsrcに持つ <img> の追加 or src属性変更を監視
+    const observerConfig = {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["src"]
+    };
+    this.observer = new MutationObserver(this.checkForNewImages.bind(this));
+    this.observer.observe(document.body, observerConfig);
+  }
+
+  checkForNewImages(mutations) {
+    for (let mutation of mutations) {
+      if (
+        mutation.type === "childList" ||
+        (mutation.type === "attributes" && mutation.attributeName === "src")
+      ) {
+        const nodes =
+          mutation.type === "childList" ? mutation.addedNodes : [mutation.target];
+        nodes.forEach((node) => {
+          // img要素かつ srcが "blob:" で始まる
+          if (
+            node.nodeType === Node.ELEMENT_NODE &&
+            node.tagName === "IMG" &&
+            node.src.startsWith("blob:") &&
+            !this.processedImages.has(node.src)
+          ) {
+            console.log("NightEagle: New image found", node.src);
+            this.processedImages.add(node.src);
+            this.callbacks.forEach((callback) => callback(node));
+          }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * パラメータ抽出用クラス
+ */
+class ParameterExtractor {
+  /**
+   * 各パラメーターをオブジェクトとして抽出する
+   */
+  extractParameters() {
+    const parameters = {};
+
+    // --- 1) Positive / Negative Prompt ---
+    // sc-249c7a4e-45 iNKDqU のなかにある <div class="ProseMirror"><p>...</p></div> を全部取得
+    const promptParagraphs = document.querySelectorAll(
+      "div.sc-249c7a4e-45.iNKDqU div.ProseMirror p"
+    );
+
+    // 先頭を Positive Prompt として取得
+    if (promptParagraphs.length > 0) {
+      parameters.positivePrompt = promptParagraphs[0].textContent.trim();
+    } else {
+      parameters.positivePrompt = "N/A";
+    }
+
+    // 2番目を Negative Prompt として取得
+    if (promptParagraphs.length > 1) {
+      parameters.negativePrompt = promptParagraphs[1].textContent.trim();
+    } else {
+      parameters.negativePrompt = "N/A";
+    }
+
+    // --- 2) Steps の抽出 ---
+    const stepsElement = document.querySelector(
+      "div.sc-b995de7a-9.frBJXL input[step='1']"
+    );
+    parameters.steps = stepsElement ? stepsElement.value : "N/A";
+
+    // --- 3) CFG の抽出 ---
+    const cfgElement = document.querySelector(
+      "div.sc-b995de7a-9.frBJXL input[step='0.1']"
+    );
+    parameters.cfg = cfgElement ? cfgElement.value : "N/A";
+
+    // --- 4) Seed の抽出 ---
+    const seedElement = document.querySelector(
+      "div.sc-249c7a4e-55.hXTjgY span span:first-child"
+    );
+    parameters.seed = seedElement ? seedElement.textContent.trim() : "N/A";
+
+    // --- 5) Sampler の抽出 ---
+    // aria-label="Select a sampler" を使うなど、構造に合わせて調整してください
+    const samplerInput = document.querySelector('input[aria-label="Select a sampler"]');
+    if (samplerInput) {
+      const samplerContainer = samplerInput.closest('.css-19sbopf-control');
+      const samplerEl = samplerContainer?.querySelector('.css-4t5j3y-singleValue');
+      parameters.sampler = samplerEl ? samplerEl.textContent.trim() : "N/A";
+    } else {
+      parameters.sampler = "N/A";
+    }
+
+    console.log("NightEagle: Extracted parameters", parameters);
+    return parameters;
+  }
+}
+
+
+/**
+ * 新規画像が見つかったときの処理
+ */
+function handleNewImage(imgNode) {
+  console.log("NightEagle: Handling new image", imgNode.src);
+  const parameters = parameterExtractor.extractParameters();
+  
+  sendMessageToBackground({
+    action: "startImageTransfer",
+    imageData: imgNode.src,
+    imageName: `NovelAI_${new Date().toISOString()}.png`,
+    parameters: parameters
+  }).catch((error) =>
+    console.error("NightEagle: Error in handleNewImage", error)
+  );
+}
+
+/**
+ * Background へメッセージを送るユーティリティ
+ */
+function sendMessageToBackground(message) {
+  return new Promise((resolve, reject) => {
+    const sendMessageWithRetry = (retryCount = 0) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn(
+            "NightEagle: Error sending message to background",
+            chrome.runtime.lastError
+          );
+          if (retryCount < 3) {
+            setTimeout(() => sendMessageWithRetry(retryCount + 1), 1000);
+          } else {
+            reject(chrome.runtime.lastError);
+          }
+        } else {
+          console.log("NightEagle: Received response from background", response);
+          resolve(response);
+        }
+      });
+    };
+    sendMessageWithRetry();
+  });
+}
+
+// Background → Content のレスポンス受信
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "transferComplete") {
+    console.log(`NightEagle: Image transfer completed for task ${message.taskId}`);
+  } else if (message.action === "transferError") {
+    console.error(
+      `NightEagle: Image transfer failed for task ${message.taskId}`,
+      message.error
+    );
+  }
+});
+
+/* --------------------------------------------------
+ * 実行開始
+ * -------------------------------------------------- */
+// （リモートのconfig.jsonを使わないならこのまま呼び出す）
+initialize();
+
+// （リモートのconfig.jsonを使いたい場合は、以下をアンコメント）
+// loadConfig();
+
+console.log("NightEagle: Content script setup complete");
+===== FILE_END: content.js =====
+
+===== FILE_START: debugger.js =====
+FILE_TYPE: javascript
+class NightEagleDebugger {
+  constructor(isEnabled = true) {
+    this.isEnabled = isEnabled;
+    this.logs = [];
+    this.errors = [];
+    this.timers = {};
+  }
+
+  enable() {
+    this.isEnabled = true;
+  }
+
+  disable() {
+    this.isEnabled = false;
+  }
+
+  log(message, data = null) {
+    if (this.isEnabled) {
+      const logEntry = { timestamp: new Date(), message, data };
+      this.logs.push(logEntry);
+      console.log(`NightEagle Debug: ${message}`, data);
+    }
+  }
+
+  error(message, error = null) {
+    if (this.isEnabled) {
+      const errorEntry = { timestamp: new Date(), message, error };
+      this.errors.push(errorEntry);
+      console.error(`NightEagle Error: ${message}`, error);
+    }
+  }
+
+  startTimer(label) {
+    if (this.isEnabled) {
+      this.timers[label] = performance.now();
+    }
+  }
+
+  endTimer(label) {
+    if (this.isEnabled && this.timers[label]) {
+      const duration = performance.now() - this.timers[label];
+      this.log(`Timer "${label}" ended`, `${duration.toFixed(2)}ms`);
+      delete this.timers[label];
+    }
+  }
+
+  getLogs() {
+    return this.logs;
+  }
+
+  getErrors() {
+    return this.errors;
+  }
+
+  clearLogs() {
+    this.logs = [];
+  }
+
+  clearErrors() {
+    this.errors = [];
+  }
+}
+
+self.NightEagleDebugger = NightEagleDebugger;
+===== FILE_END: debugger.js =====
+
+===== FILE_START: manifest.json =====
+FILE_TYPE: json
+{
+  "manifest_version": 3,
+  "name": "NightEagle -NovelAI to Eagle-",
+  "version": "2.1",
+  "description": "Automatically transfer generated images from NovelAI to Eagle",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://novelai.net/*",
+    "http://localhost:41595/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://novelai.net/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["debugger.js"],
+      "matches": ["https://novelai.net/*"]
+    }
+  ]
+}
+===== FILE_END: manifest.json =====
+
+===== FILE_START: popup.html =====
+FILE_TYPE: html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NightEagle Settings</title>
+  <style>
+    body { width: 300px; padding: 10px; font-family: Arial, sans-serif; }
+    label, select, textarea { display: block; margin-bottom: 10px; width: 100%; }
+    #eagleFolder { font-family: monospace; }
+    #eagleFolder option { padding: 2px 4px; }
+  </style>
+</head>
+<body>
+  <h1>NightEagle Settings</h1>
+  
+  <label for="eagleFolder">Eagle Folder:</label>
+  <select id="eagleFolder" name="eagleFolder"></select>
+  
+  <label for="allTags">All Tags (comma-separated):</label>
+  <textarea id="allTags" name="allTags" rows="5"></textarea>
+  
+  <div id="status"></div>
+  
+  <button id="showDebugLogs">Show Debug Logs</button>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
+===== FILE_END: popup.html =====
+
+===== FILE_START: popup.js =====
+FILE_TYPE: javascript
+document.addEventListener('DOMContentLoaded', function() {
+  const eagleFolderSelect = document.getElementById('eagleFolder');
+  const allTagsTextarea = document.getElementById('allTags');
+  const statusDiv = document.getElementById('status');
+  const showDebugLogsButton = document.getElementById('showDebugLogs');
+
+  // Load settings
+  chrome.storage.sync.get(['eagleFolder', 'allTags'], function(result) {
+    if (result.eagleFolder) {
+      eagleFolderSelect.value = result.eagleFolder;
+    }
+    if (result.allTags) {
+      allTagsTextarea.value = result.allTags;
+    }
+  });
+
+  // Save settings
+  function saveSettings() {
+    chrome.storage.sync.set({
+      eagleFolder: eagleFolderSelect.value,
+      allTags: allTagsTextarea.value
+    }, function() {
+      showToast('Settings saved');
+    });
+  }
+
+  eagleFolderSelect.addEventListener('change', saveSettings);
+  allTagsTextarea.addEventListener('input', saveSettings);
+
+  // Load Eagle folders
+  function loadEagleFolders() {
+    fetch('http://localhost:41595/api/folder/list')
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'success') {
+          populateFolderSelect(data.data);
+        } else {
+          showToast('Failed to load Eagle folders');
+        }
+      })
+      .catch(error => {
+        showToast('Error loading Eagle folders');
+        console.error('Error:', error);
+      });
+  }
+
+  function populateFolderSelect(folders, prefix = '') {
+    folders.forEach(folder => {
+      const option = document.createElement('option');
+      option.value = folder.id;
+      option.textContent = prefix + folder.name;
+      eagleFolderSelect.appendChild(option);
+
+      if (folder.children && folder.children.length > 0) {
+        populateFolderSelect(folder.children, prefix + '- ');
+      }
+    });
+  }
+
+  loadEagleFolders();
+
+  // Show debug logs
+  showDebugLogsButton.addEventListener('click', function() {
+    chrome.runtime.sendMessage({action: "getDebugLogs"}, function(response) {
+      console.log("Debug Logs:", response.logs);
+      console.log("Error Logs:", response.errors);
+      showToast('Debug logs printed to console');
+    });
+  });
+
+  function showToast(message) {
+    statusDiv.textContent = message;
+    statusDiv.style.opacity = '1';
+    setTimeout(() => {
+      statusDiv.style.opacity = '0';
+    }, 2000);
+  }
+});
+===== FILE_END: popup.js =====
+
+===== FILE_START: readme.md =====
+FILE_TYPE: markdown
+ # NightEagle -NovelAI to Eagle-
+
+![My animation](./images/NightEagleDemo.gif)
+
+NightEagleは、NovelAIで生成された画像を自動的にEagleに転送するChrome拡張機能です。
+
+## 更新履歴
+
+- 2024/8/11: 管理しやすくするために作り替えました。
+- 2024/7/8: 任意のEagle内フォルダに転送する機能を追加しました。
+  - [da2el-ai](https://github.com/da2el-ai) さんから貴重なアイデアをいただきました。
+- 2024/7/7: NightEagleのポップアップメニュー内に任意のタグを付与する機能を追加しました。
+- 2024/7/7: 根本的に構造を見直して安定してEagleに転送できるように作り直しました。
+- 2024/7/5: リリース、めっちゃ不安定なので作り直すつもり。
+
+## 注意事項
+
+- NovelAIとEagleの利用規約に同意する必要があります。
+- 個人で使用する目的でのみ使用してください。
+- たまに上手く動かない時がありますが、PCを再起動すると正常に動作すると思います。(稀にEagleとの接続が上手くいかない時があります)
+
+## インストール方法
+
+1. このリポジトリをクローンまたはダウンロードします。
+   - ![My animation](./images/nighteagledownload.gif)
+   - ダウンロードした場合はzipファイルを解凍します。
+3. Chromeブラウザを開き、`chrome://extensions` にアクセスします。
+4. 右上の「デベロッパーモード」をオンにします。
+5. 「パッケージ化されていない拡張機能を読み込む」をクリックします。
+6. NightEagleのフォルダを選択します。
+   - ダウンロードした場合は解凍したフォルダを選択します。
+
+## 使用方法
+
+- NAIのページを再読み込みしてから生成してください。
+- インストールが出来ていれば、Eagleを起動した状態でNAIのページで生成すれば勝手に転送してくれます。
+- 拡張機能のアイコンを表示させて、クリックするとポップアップメニューでEagleの転送先フォルダを任意に変更できます。
+
+**注意** 
+-ネガティブプロンプトの表示モードをタブ切り替えにしている場合は、ネガティブプロンプトを表示するようにしてください。
+
+## トラブルシューティング
+- Chromeのコンソールでエラーメッセージを確認し、問題がある場合は報告してください。
+- たまに上手くいかない時がありますが、PCを再起動してもう一度試してみて下さい。
+- ファイアーウォール等は切るか、eagleを除外するよう設定してみてください。
+
+## プライバシーとセキュリティ
+- この拡張機能は、NovelAIで生成された画像とそのメタデータのみを扱います。
+- データはローカルのEagleアプリケーションにのみ転送され、第三者と共有されることはありません。
+- 拡張機能のソースコードは公開されており、動作を確認することができます。
+
+## 貢献
+バグ報告や機能リクエストは、GitHubのIssuesを使用してください。プルリクエストも歓迎します。
+
+## ライセンス
+このプロジェクトは[MITライセンス](LICENSE)の下で公開されています。
+
+## 免責事項
+
+この拡張機能は、NovelAIおよびEagleと直接の関連はありません。使用に伴うリスクはユーザーが負うものとします。
+
+## アップデート予定
+- NAIのページがアプデした際に対処しやすくなるようにセレクターをjsonで管理
+- ブラウザ版niji/mid向け(未定)
+- ComfyUI版 (未定)
+
+===== FILE_END: readme.md =====
+
+===== FILE_START: config =====
+FILE_TYPE: unknown
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+	ignorecase = true
+[remote "origin"]
+	url = https://github.com/NakamuraShippo/NightEagle
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+	vscode-merge-base = origin/main
+	vscode-merge-base = origin/main
+
+===== FILE_END: config =====
+
+===== FILE_START: description =====
+FILE_TYPE: unknown
+Unnamed repository; edit this file 'description' to name the repository.
+
+===== FILE_END: description =====
+
+===== FILE_START: HEAD =====
+FILE_TYPE: unknown
+ref: refs/heads/main
+
+===== FILE_END: HEAD =====
+
+===== FILE_START: index =====
+FILE_TYPE: unknown
+[Unable to read file: index. It may be a binary file.]
+
+===== FILE_END: index =====
+
+===== FILE_START: packed-refs =====
+FILE_TYPE: unknown
+# pack-refs with: peeled fully-peeled sorted 
+a55bdc8013b3bee8af046a2523e183371f85d165 refs/remotes/origin/main
+
+===== FILE_END: packed-refs =====
+
+===== FILE_START: applypatch-msg.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to check the commit log message taken by
+# applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.  The hook is
+# allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "applypatch-msg".
+
+. git-sh-setup
+commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
+test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
+:
+
+===== FILE_END: applypatch-msg.sample =====
+
+===== FILE_START: commit-msg.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to check the commit log message.
+# Called by "git commit" with one argument, the name of the file
+# that has the commit message.  The hook should exit with non-zero
+# status after issuing an appropriate message if it wants to stop the
+# commit.  The hook is allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "commit-msg".
+
+# Uncomment the below to add a Signed-off-by line to the message.
+# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
+# hook is more suited to it.
+#
+# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
+
+# This example catches duplicate Signed-off-by lines.
+
+test "" = "$(grep '^Signed-off-by: ' "$1" |
+	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
+	echo >&2 Duplicate Signed-off-by lines.
+	exit 1
+}
+
+===== FILE_END: commit-msg.sample =====
+
+===== FILE_START: fsmonitor-watchman.sample =====
+FILE_TYPE: unknown
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use IPC::Open2;
+
+# An example hook script to integrate Watchman
+# (https://facebook.github.io/watchman/) with git to speed up detecting
+# new and modified files.
+#
+# The hook is passed a version (currently 2) and last update token
+# formatted as a string and outputs to stdout a new update token and
+# all files that have been modified since the update token. Paths must
+# be relative to the root of the working tree and separated by a single NUL.
+#
+# To enable this hook, rename this file to "query-watchman" and set
+# 'git config core.fsmonitor .git/hooks/query-watchman'
+#
+my ($version, $last_update_token) = @ARGV;
+
+# Uncomment for debugging
+# print STDERR "$0 $version $last_update_token\n";
+
+# Check the hook interface version
+if ($version ne 2) {
+	die "Unsupported query-fsmonitor hook version '$version'.\n" .
+	    "Falling back to scanning...\n";
+}
+
+my $git_work_tree = get_working_dir();
+
+my $retry = 1;
+
+my $json_pkg;
+eval {
+	require JSON::XS;
+	$json_pkg = "JSON::XS";
+	1;
+} or do {
+	require JSON::PP;
+	$json_pkg = "JSON::PP";
+};
+
+launch_watchman();
+
+sub launch_watchman {
+	my $o = watchman_query();
+	if (is_work_tree_watched($o)) {
+		output_result($o->{clock}, @{$o->{files}});
+	}
+}
+
+sub output_result {
+	my ($clockid, @files) = @_;
+
+	# Uncomment for debugging watchman output
+	# open (my $fh, ">", ".git/watchman-output.out");
+	# binmode $fh, ":utf8";
+	# print $fh "$clockid\n@files\n";
+	# close $fh;
+
+	binmode STDOUT, ":utf8";
+	print $clockid;
+	print "\0";
+	local $, = "\0";
+	print @files;
+}
+
+sub watchman_clock {
+	my $response = qx/watchman clock "$git_work_tree"/;
+	die "Failed to get clock id on '$git_work_tree'.\n" .
+		"Falling back to scanning...\n" if $? != 0;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub watchman_query {
+	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
+	or die "open2() failed: $!\n" .
+	"Falling back to scanning...\n";
+
+	# In the query expression below we're asking for names of files that
+	# changed since $last_update_token but not from the .git folder.
+	#
+	# To accomplish this, we're using the "since" generator to use the
+	# recency index to select candidate nodes and "fields" to limit the
+	# output to file names only. Then we're using the "expression" term to
+	# further constrain the results.
+	my $last_update_line = "";
+	if (substr($last_update_token, 0, 1) eq "c") {
+		$last_update_token = "\"$last_update_token\"";
+		$last_update_line = qq[\n"since": $last_update_token,];
+	}
+	my $query = <<"	END";
+		["query", "$git_work_tree", {$last_update_line
+			"fields": ["name"],
+			"expression": ["not", ["dirname", ".git"]]
+		}]
+	END
+
+	# Uncomment for debugging the watchman query
+	# open (my $fh, ">", ".git/watchman-query.json");
+	# print $fh $query;
+	# close $fh;
+
+	print CHLD_IN $query;
+	close CHLD_IN;
+	my $response = do {local $/; <CHLD_OUT>};
+
+	# Uncomment for debugging the watch response
+	# open ($fh, ">", ".git/watchman-response.json");
+	# print $fh $response;
+	# close $fh;
+
+	die "Watchman: command returned no output.\n" .
+	"Falling back to scanning...\n" if $response eq "";
+	die "Watchman: command returned invalid output: $response\n" .
+	"Falling back to scanning...\n" unless $response =~ /^\{/;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub is_work_tree_watched {
+	my ($output) = @_;
+	my $error = $output->{error};
+	if ($retry > 0 and $error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
+		$retry--;
+		my $response = qx/watchman watch "$git_work_tree"/;
+		die "Failed to make watchman watch '$git_work_tree'.\n" .
+		    "Falling back to scanning...\n" if $? != 0;
+		$output = $json_pkg->new->utf8->decode($response);
+		$error = $output->{error};
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		# Uncomment for debugging watchman output
+		# open (my $fh, ">", ".git/watchman-output.out");
+		# close $fh;
+
+		# Watchman will always return all files on the first query so
+		# return the fast "everything is dirty" flag to git and do the
+		# Watchman query just to get it over with now so we won't pay
+		# the cost in git to look up each individual file.
+		my $o = watchman_clock();
+		$error = $output->{error};
+
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		output_result($o->{clock}, ("/"));
+		$last_update_token = $o->{clock};
+
+		eval { launch_watchman() };
+		return 0;
+	}
+
+	die "Watchman: $error.\n" .
+	"Falling back to scanning...\n" if $error;
+
+	return 1;
+}
+
+sub get_working_dir {
+	my $working_dir;
+	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
+		$working_dir = Win32::GetCwd();
+		$working_dir =~ tr/\\/\//;
+	} else {
+		require Cwd;
+		$working_dir = Cwd::cwd();
+	}
+
+	return $working_dir;
+}
+
+===== FILE_END: fsmonitor-watchman.sample =====
+
+===== FILE_START: post-update.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to prepare a packed repository for use over
+# dumb transports.
+#
+# To enable this hook, rename this file to "post-update".
+
+exec git update-server-info
+
+===== FILE_END: post-update.sample =====
+
+===== FILE_START: pre-applypatch.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed
+# by applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-applypatch".
+
+. git-sh-setup
+precommit="$(git rev-parse --git-path hooks/pre-commit)"
+test -x "$precommit" && exec "$precommit" ${1+"$@"}
+:
+
+===== FILE_END: pre-applypatch.sample =====
+
+===== FILE_START: pre-commit.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git commit" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message if
+# it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-commit".
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+	against=HEAD
+else
+	# Initial commit: diff against an empty tree object
+	against=$(git hash-object -t tree /dev/null)
+fi
+
+# If you want to allow non-ASCII filenames set this variable to true.
+allownonascii=$(git config --type=bool hooks.allownonascii)
+
+# Redirect output to stderr.
+exec 1>&2
+
+# Cross platform projects tend to avoid non-ASCII filenames; prevent
+# them from being added to the repository. We exploit the fact that the
+# printable range starts at the space character and ends with tilde.
+if [ "$allownonascii" != "true" ] &&
+	# Note that the use of brackets around a tr range is ok here, (it's
+	# even required, for portability to Solaris 10's /usr/bin/tr), since
+	# the square bracket bytes happen to fall in the designated range.
+	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
+	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
+then
+	cat <<\EOF
+Error: Attempt to add a non-ASCII file name.
+
+This can cause problems if you want to work with people on other platforms.
+
+To be portable it is advisable to rename the file.
+
+If you know what you are doing you can disable this check using:
+
+  git config hooks.allownonascii true
+EOF
+	exit 1
+fi
+
+# If there are whitespace errors, print the offending file names and fail.
+exec git diff-index --check --cached $against --
+
+===== FILE_END: pre-commit.sample =====
+
+===== FILE_START: pre-merge-commit.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git merge" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message to
+# stderr if it wants to stop the merge commit.
+#
+# To enable this hook, rename this file to "pre-merge-commit".
+
+. git-sh-setup
+test -x "$GIT_DIR/hooks/pre-commit" &&
+        exec "$GIT_DIR/hooks/pre-commit"
+:
+
+===== FILE_END: pre-merge-commit.sample =====
+
+===== FILE_START: pre-push.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+
+# An example hook script to verify what is about to be pushed.  Called by "git
+# push" after it has checked the remote status, but before anything has been
+# pushed.  If this script exits with a non-zero status nothing will be pushed.
+#
+# This hook is called with the following parameters:
+#
+# $1 -- Name of the remote to which the push is being done
+# $2 -- URL to which the push is being done
+#
+# If pushing without using a named remote those arguments will be equal.
+#
+# Information about the commits which are being pushed is supplied as lines to
+# the standard input in the form:
+#
+#   <local ref> <local oid> <remote ref> <remote oid>
+#
+# This sample shows how to prevent push of commits where the log message starts
+# with "WIP" (work in progress).
+
+remote="$1"
+url="$2"
+
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+
+while read local_ref local_oid remote_ref remote_oid
+do
+	if test "$local_oid" = "$zero"
+	then
+		# Handle delete
+		:
+	else
+		if test "$remote_oid" = "$zero"
+		then
+			# New branch, examine all commits
+			range="$local_oid"
+		else
+			# Update to existing branch, examine new commits
+			range="$remote_oid..$local_oid"
+		fi
+
+		# Check for WIP commit
+		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
+		if test -n "$commit"
+		then
+			echo >&2 "Found WIP commit in $local_ref, not pushing"
+			exit 1
+		fi
+	fi
+done
+
+exit 0
+
+===== FILE_END: pre-push.sample =====
+
+===== FILE_START: pre-rebase.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# Copyright (c) 2006, 2008 Junio C Hamano
+#
+# The "pre-rebase" hook is run just before "git rebase" starts doing
+# its job, and can prevent the command from running by exiting with
+# non-zero status.
+#
+# The hook is called with the following parameters:
+#
+# $1 -- the upstream the series was forked from.
+# $2 -- the branch being rebased (or empty when rebasing the current branch).
+#
+# This sample shows how to prevent topic branches that are already
+# merged to 'next' branch from getting rebased, because allowing it
+# would result in rebasing already published history.
+
+publish=next
+basebranch="$1"
+if test "$#" = 2
+then
+	topic="refs/heads/$2"
+else
+	topic=`git symbolic-ref HEAD` ||
+	exit 0 ;# we do not interrupt rebasing detached HEAD
+fi
+
+case "$topic" in
+refs/heads/??/*)
+	;;
+*)
+	exit 0 ;# we do not interrupt others.
+	;;
+esac
+
+# Now we are dealing with a topic branch being rebased
+# on top of master.  Is it OK to rebase it?
+
+# Does the topic really exist?
+git show-ref -q "$topic" || {
+	echo >&2 "No such branch $topic"
+	exit 1
+}
+
+# Is topic fully merged to master?
+not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
+if test -z "$not_in_master"
+then
+	echo >&2 "$topic is fully merged to master; better remove it."
+	exit 1 ;# we could allow it, but there is no point.
+fi
+
+# Is topic ever merged to next?  If so you should not be rebasing it.
+only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
+only_next_2=`git rev-list ^master           ${publish} | sort`
+if test "$only_next_1" = "$only_next_2"
+then
+	not_in_topic=`git rev-list "^$topic" master`
+	if test -z "$not_in_topic"
+	then
+		echo >&2 "$topic is already up to date with master"
+		exit 1 ;# we could allow it, but there is no point.
+	else
+		exit 0
+	fi
+else
+	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
+	/usr/bin/perl -e '
+		my $topic = $ARGV[0];
+		my $msg = "* $topic has commits already merged to public branch:\n";
+		my (%not_in_next) = map {
+			/^([0-9a-f]+) /;
+			($1 => 1);
+		} split(/\n/, $ARGV[1]);
+		for my $elem (map {
+				/^([0-9a-f]+) (.*)$/;
+				[$1 => $2];
+			} split(/\n/, $ARGV[2])) {
+			if (!exists $not_in_next{$elem->[0]}) {
+				if ($msg) {
+					print STDERR $msg;
+					undef $msg;
+				}
+				print STDERR " $elem->[1]\n";
+			}
+		}
+	' "$topic" "$not_in_next" "$not_in_master"
+	exit 1
+fi
+
+<<\DOC_END
+
+This sample hook safeguards topic branches that have been
+published from being rewound.
+
+The workflow assumed here is:
+
+ * Once a topic branch forks from "master", "master" is never
+   merged into it again (either directly or indirectly).
+
+ * Once a topic branch is fully cooked and merged into "master",
+   it is deleted.  If you need to build on top of it to correct
+   earlier mistakes, a new topic branch is created by forking at
+   the tip of the "master".  This is not strictly necessary, but
+   it makes it easier to keep your history simple.
+
+ * Whenever you need to test or publish your changes to topic
+   branches, merge them into "next" branch.
+
+The script, being an example, hardcodes the publish branch name
+to be "next", but it is trivial to make it configurable via
+$GIT_DIR/config mechanism.
+
+With this workflow, you would want to know:
+
+(1) ... if a topic branch has ever been merged to "next".  Young
+    topic branches can have stupid mistakes you would rather
+    clean up before publishing, and things that have not been
+    merged into other branches can be easily rebased without
+    affecting other people.  But once it is published, you would
+    not want to rewind it.
+
+(2) ... if a topic branch has been fully merged to "master".
+    Then you can delete it.  More importantly, you should not
+    build on top of it -- other people may already want to
+    change things related to the topic as patches against your
+    "master", so if you need further changes, it is better to
+    fork the topic (perhaps with the same name) afresh from the
+    tip of "master".
+
+Let's look at this example:
+
+		   o---o---o---o---o---o---o---o---o---o "next"
+		  /       /           /           /
+		 /   a---a---b A     /           /
+		/   /               /           /
+	       /   /   c---c---c---c B         /
+	      /   /   /             \         /
+	     /   /   /   b---b C     \       /
+	    /   /   /   /             \     /
+    ---o---o---o---o---o---o---o---o---o---o---o "master"
+
+
+A, B and C are topic branches.
+
+ * A has one fix since it was merged up to "next".
+
+ * B has finished.  It has been fully merged up to "master" and "next",
+   and is ready to be deleted.
+
+ * C has not merged to "next" at all.
+
+We would want to allow C to be rebased, refuse A, and encourage
+B to be deleted.
+
+To compute (1):
+
+	git rev-list ^master ^topic next
+	git rev-list ^master        next
+
+	if these match, topic has not merged in next at all.
+
+To compute (2):
+
+	git rev-list master..topic
+
+	if this is empty, it is fully merged to "master".
+
+DOC_END
+
+===== FILE_END: pre-rebase.sample =====
+
+===== FILE_START: pre-receive.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to make use of push options.
+# The example simply echoes all push options that start with 'echoback='
+# and rejects all pushes when the "reject" push option is used.
+#
+# To enable this hook, rename this file to "pre-receive".
+
+if test -n "$GIT_PUSH_OPTION_COUNT"
+then
+	i=0
+	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
+	do
+		eval "value=\$GIT_PUSH_OPTION_$i"
+		case "$value" in
+		echoback=*)
+			echo "echo from the pre-receive-hook: ${value#*=}" >&2
+			;;
+		reject)
+			exit 1
+		esac
+		i=$((i + 1))
+	done
+fi
+
+===== FILE_END: pre-receive.sample =====
+
+===== FILE_START: prepare-commit-msg.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to prepare the commit log message.
+# Called by "git commit" with the name of the file that has the
+# commit message, followed by the description of the commit
+# message's source.  The hook's purpose is to edit the commit
+# message file.  If the hook fails with a non-zero status,
+# the commit is aborted.
+#
+# To enable this hook, rename this file to "prepare-commit-msg".
+
+# This hook includes three examples. The first one removes the
+# "# Please enter the commit message..." help message.
+#
+# The second includes the output of "git diff --name-status -r"
+# into the message, just before the "git status" output.  It is
+# commented because it doesn't cope with --amend or with squashed
+# commits.
+#
+# The third example adds a Signed-off-by line to the message, that can
+# still be edited.  This is rarely a good idea.
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+SHA1=$3
+
+/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
+
+# case "$COMMIT_SOURCE,$SHA1" in
+#  ,|template,)
+#    /usr/bin/perl -i.bak -pe '
+#       print "\n" . `git diff --cached --name-status -r`
+# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
+#  *) ;;
+# esac
+
+# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
+# if test -z "$COMMIT_SOURCE"
+# then
+#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
+# fi
+
+===== FILE_END: prepare-commit-msg.sample =====
+
+===== FILE_START: push-to-checkout.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+
+# An example hook script to update a checked-out tree on a git push.
+#
+# This hook is invoked by git-receive-pack(1) when it reacts to git
+# push and updates reference(s) in its repository, and when the push
+# tries to update the branch that is currently checked out and the
+# receive.denyCurrentBranch configuration variable is set to
+# updateInstead.
+#
+# By default, such a push is refused if the working tree and the index
+# of the remote repository has any difference from the currently
+# checked out commit; when both the working tree and the index match
+# the current commit, they are updated to match the newly pushed tip
+# of the branch. This hook is to be used to override the default
+# behaviour; however the code below reimplements the default behaviour
+# as a starting point for convenient modification.
+#
+# The hook receives the commit with which the tip of the current
+# branch is going to be updated:
+commit=$1
+
+# It can exit with a non-zero status to refuse the push (when it does
+# so, it must not modify the index or the working tree).
+die () {
+	echo >&2 "$*"
+	exit 1
+}
+
+# Or it can make any necessary changes to the working tree and to the
+# index to bring them to the desired state when the tip of the current
+# branch is updated to the new commit, and exit with a zero status.
+#
+# For example, the hook can simply run git read-tree -u -m HEAD "$1"
+# in order to emulate git fetch that is run in the reverse direction
+# with git push, as the two-tree form of git read-tree -u -m is
+# essentially the same as git switch or git checkout that switches
+# branches while keeping the local changes in the working tree that do
+# not interfere with the difference between the branches.
+
+# The below is a more-or-less exact translation to shell of the C code
+# for the default behaviour for git's push-to-checkout hook defined in
+# the push_to_deploy() function in builtin/receive-pack.c.
+#
+# Note that the hook will be executed from the repository directory,
+# not from the working tree, so if you want to perform operations on
+# the working tree, you will have to adapt your code accordingly, e.g.
+# by adding "cd .." or using relative paths.
+
+if ! git update-index -q --ignore-submodules --refresh
+then
+	die "Up-to-date check failed"
+fi
+
+if ! git diff-files --quiet --ignore-submodules --
+then
+	die "Working directory has unstaged changes"
+fi
+
+# This is a rough translation of:
+#
+#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
+if git cat-file -e HEAD 2>/dev/null
+then
+	head=HEAD
+else
+	head=$(git hash-object -t tree --stdin </dev/null)
+fi
+
+if ! git diff-index --quiet --cached --ignore-submodules $head --
+then
+	die "Working directory has staged changes"
+fi
+
+if ! git read-tree -u -m "$commit"
+then
+	die "Could not update working tree to new HEAD"
+fi
+
+===== FILE_END: push-to-checkout.sample =====
+
+===== FILE_START: sendemail-validate.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+
+# An example hook script to validate a patch (and/or patch series) before
+# sending it via email.
+#
+# The hook should exit with non-zero status after issuing an appropriate
+# message if it wants to prevent the email(s) from being sent.
+#
+# To enable this hook, rename this file to "sendemail-validate".
+#
+# By default, it will only check that the patch(es) can be applied on top of
+# the default upstream branch without conflicts in a secondary worktree. After
+# validation (successful or not) of the last patch of a series, the worktree
+# will be deleted.
+#
+# The following config variables can be set to change the default remote and
+# remote ref that are used to apply the patches against:
+#
+#   sendemail.validateRemote (default: origin)
+#   sendemail.validateRemoteRef (default: HEAD)
+#
+# Replace the TODO placeholders with appropriate checks according to your
+# needs.
+
+validate_cover_letter () {
+	file="$1"
+	# TODO: Replace with appropriate checks (e.g. spell checking).
+	true
+}
+
+validate_patch () {
+	file="$1"
+	# Ensure that the patch applies without conflicts.
+	git am -3 "$file" || return
+	# TODO: Replace with appropriate checks for this patch
+	# (e.g. checkpatch.pl).
+	true
+}
+
+validate_series () {
+	# TODO: Replace with appropriate checks for the whole series
+	# (e.g. quick build, coding style checks, etc.).
+	true
+}
+
+# main -------------------------------------------------------------------------
+
+if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
+then
+	remote=$(git config --default origin --get sendemail.validateRemote) &&
+	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
+	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
+	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
+	git config --replace-all sendemail.validateWorktree "$worktree"
+else
+	worktree=$(git config --get sendemail.validateWorktree)
+fi || {
+	echo "sendemail-validate: error: failed to prepare worktree" >&2
+	exit 1
+}
+
+unset GIT_DIR GIT_WORK_TREE
+cd "$worktree" &&
+
+if grep -q "^diff --git " "$1"
+then
+	validate_patch "$1"
+else
+	validate_cover_letter "$1"
+fi &&
+
+if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
+then
+	git config --unset-all sendemail.validateWorktree &&
+	trap 'git worktree remove -ff "$worktree"' EXIT &&
+	validate_series
+fi
+
+===== FILE_END: sendemail-validate.sample =====
+
+===== FILE_START: update.sample =====
+FILE_TYPE: unknown
+#!/bin/sh
+#
+# An example hook script to block unannotated tags from entering.
+# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
+#
+# To enable this hook, rename this file to "update".
+#
+# Config
+# ------
+# hooks.allowunannotated
+#   This boolean sets whether unannotated tags will be allowed into the
+#   repository.  By default they won't be.
+# hooks.allowdeletetag
+#   This boolean sets whether deleting tags will be allowed in the
+#   repository.  By default they won't be.
+# hooks.allowmodifytag
+#   This boolean sets whether a tag may be modified after creation. By default
+#   it won't be.
+# hooks.allowdeletebranch
+#   This boolean sets whether deleting branches will be allowed in the
+#   repository.  By default they won't be.
+# hooks.denycreatebranch
+#   This boolean sets whether remotely creating branches will be denied
+#   in the repository.  By default this is allowed.
+#
+
+# --- Command line
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+# --- Safety check
+if [ -z "$GIT_DIR" ]; then
+	echo "Don't run this script from the command line." >&2
+	echo " (if you want, you could supply GIT_DIR then run" >&2
+	echo "  $0 <ref> <oldrev> <newrev>)" >&2
+	exit 1
+fi
+
+if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
+	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
+	exit 1
+fi
+
+# --- Config
+allowunannotated=$(git config --type=bool hooks.allowunannotated)
+allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
+denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
+allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
+allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
+
+# check for no description
+projectdesc=$(sed -e '1q' "$GIT_DIR/description")
+case "$projectdesc" in
+"Unnamed repository"* | "")
+	echo "*** Project description file hasn't been set" >&2
+	exit 1
+	;;
+esac
+
+# --- Check types
+# if $newrev is 0000...0000, it's a commit to delete a ref.
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+if [ "$newrev" = "$zero" ]; then
+	newrev_type=delete
+else
+	newrev_type=$(git cat-file -t $newrev)
+fi
+
+case "$refname","$newrev_type" in
+	refs/tags/*,commit)
+		# un-annotated tag
+		short_refname=${refname##refs/tags/}
+		if [ "$allowunannotated" != "true" ]; then
+			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
+			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,delete)
+		# delete tag
+		if [ "$allowdeletetag" != "true" ]; then
+			echo "*** Deleting a tag is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,tag)
+		# annotated tag
+		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
+		then
+			echo "*** Tag '$refname' already exists." >&2
+			echo "*** Modifying a tag is not allowed in this repository." >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,commit)
+		# branch
+		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
+			echo "*** Creating a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,delete)
+		# delete branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/remotes/*,commit)
+		# tracking branch
+		;;
+	refs/remotes/*,delete)
+		# delete tracking branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	*)
+		# Anything else (is there anything else?)
+		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
+		exit 1
+		;;
+esac
+
+# --- Finished
+exit 0
+
+===== FILE_END: update.sample =====
+
+===== FILE_START: exclude =====
+FILE_TYPE: unknown
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+===== FILE_END: exclude =====
+
+===== FILE_START: HEAD =====
+FILE_TYPE: unknown
+0000000000000000000000000000000000000000 a55bdc8013b3bee8af046a2523e183371f85d165 NakamuraShippo <nakamurashippo@gmail.com> 1739281873 +0900	clone: from https://github.com/NakamuraShippo/NightEagle
+
+===== FILE_END: HEAD =====
+
+===== FILE_START: main =====
+FILE_TYPE: unknown
+0000000000000000000000000000000000000000 a55bdc8013b3bee8af046a2523e183371f85d165 NakamuraShippo <nakamurashippo@gmail.com> 1739281873 +0900	clone: from https://github.com/NakamuraShippo/NightEagle
+
+===== FILE_END: main =====
+
+===== FILE_START: HEAD =====
+FILE_TYPE: unknown
+0000000000000000000000000000000000000000 a55bdc8013b3bee8af046a2523e183371f85d165 NakamuraShippo <nakamurashippo@gmail.com> 1739281873 +0900	clone: from https://github.com/NakamuraShippo/NightEagle
+
+===== FILE_END: HEAD =====
+
+===== FILE_START: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.idx =====
+FILE_TYPE: unknown
+[Unable to read file: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.idx. It may be a binary file.]
+
+===== FILE_END: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.idx =====
+
+===== FILE_START: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.pack =====
+FILE_TYPE: unknown
+[Unable to read file: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.pack. It may be a binary file.]
+
+===== FILE_END: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.pack =====
+
+===== FILE_START: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.rev =====
+FILE_TYPE: unknown
+[Unable to read file: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.rev. It may be a binary file.]
+
+===== FILE_END: pack-7bcf7cf0a7355607b7fca8da8b05188e91887cc7.rev =====
+
+===== FILE_START: main =====
+FILE_TYPE: unknown
+a55bdc8013b3bee8af046a2523e183371f85d165
+
+===== FILE_END: main =====
+
+===== FILE_START: HEAD =====
+FILE_TYPE: unknown
+ref: refs/remotes/origin/main
+
+===== FILE_END: HEAD =====
+
+===== FILE_START: icon128.png =====
+FILE_TYPE: unknown
+[Unable to read file: icon128.png. It may be a binary file.]
+
+===== FILE_END: icon128.png =====
+
+===== FILE_START: icon16.png =====
+FILE_TYPE: unknown
+[Unable to read file: icon16.png. It may be a binary file.]
+
+===== FILE_END: icon16.png =====
+
+===== FILE_START: icon48.png =====
+FILE_TYPE: unknown
+[Unable to read file: icon48.png. It may be a binary file.]
+
+===== FILE_END: icon48.png =====
+
+===== FILE_START: NightEagleDemo.gif =====
+FILE_TYPE: unknown
+[Unable to read file: NightEagleDemo.gif. It may be a binary file.]
+
+===== FILE_END: NightEagleDemo.gif =====
+
+===== FILE_START: config-manager.js =====
+FILE_TYPE: javascript
+class ConfigManager {
+  constructor(debug) {
+    this.debug = debug;
+    this.config = null;
+  }
+
+  async loadConfig() {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/NakamuraShippo/nighteagle/main/config.json');
+      this.config = await response.json();
+      this.debug.log('Config loaded', this.config);
+      this.scheduleNextUpdate();
+    } catch (error) {
+      this.debug.error('Error loading config:', error);
+    }
+  }
+
+  async updateConfig() {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/NakamuraShippo/nighteagle/main/config.json');
+      const newConfig = await response.json();
+      if (newConfig.version !== this.config.version) {
+        this.config = newConfig;
+        chrome.storage.local.set({ config: this.config });
+        this.debug.log('Config updated to version:', this.config.version);
+      }
+    } catch (error) {
+      this.debug.error('Error updating config:', error);
+    }
+    this.scheduleNextUpdate();
+  }
+
+  scheduleNextUpdate() {
+    setTimeout(() => this.updateConfig(), this.config.updateInterval);
+  }
+
+  getSelector(key) {
+    return this.config.selectors[key];
+  }
+}
+
+self.ConfigManager = ConfigManager;
+
+===== FILE_END: config-manager.js =====
+
+===== FILE_START: eagle-service.js =====
+FILE_TYPE: javascript
+class EagleService {
+  constructor(debug) {
+    this.debug = debug;
+  }
+
+  async sendImageToEagle(imageData, imageName, parameters, tags, folderId) {
+    this.debug.log("Sending image to Eagle", { imageName, folderId, tags });
+
+    const memo = `Positive Prompt:\n${parameters.positivePrompt}\n\n` +
+                `Negative Prompt:\n${parameters.negativePrompt}\n\n` +
+                `Steps: ${parameters.steps}\n` +
+                `CFG: ${parameters.cfg}\n` +
+                `Seed: ${parameters.seed}\n` +
+                `Sampler: ${parameters.sampler}`;
+                
+
+    const requestBody = {
+      url: imageData,
+      name: imageName,
+      website: "https://novelai.net/",
+      annotation: memo,
+      tags: tags,
+      folderId: folderId
+    };
+
+    try {
+      const response = await fetch("http://localhost:41595/api/item/addFromURL", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}, statusText: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      this.debug.log("Eagle API response", result);
+      return result;
+    } catch (error) {
+      this.debug.error("Error sending image to Eagle", error);
+      throw error;
+    }
+  }
+}
+
+self.EagleService = EagleService;
+===== FILE_END: eagle-service.js =====
+
+===== FILE_START: image-transfer-service.js =====
+FILE_TYPE: javascript
+class ImageTransferService {
+  constructor(debug, eagleService, taskManager) {
+    this.debug = debug;
+    this.eagleService = eagleService;
+    this.taskManager = taskManager;
+  }
+
+  async handleImageTransfer(imageData, imageName, parameters, taskId, tabId) {
+    try {
+      this.debug.log(`Starting image transfer for task ${taskId}`);
+      this.taskManager.updateTaskStatus(taskId, 'fetching', 10);
+      const blob = await this.fetchBlob(imageData);
+
+      this.taskManager.updateTaskStatus(taskId, 'converting', 30);
+      const base64data = await this.blobToBase64(blob);
+
+      this.taskManager.updateTaskStatus(taskId, 'sending', 50);
+      
+      const settings = await chrome.storage.sync.get(['eagleFolder', 'allTags']);
+      const tags = settings.allTags ? settings.allTags.split(',').map(tag => tag.trim()) : ["NovelAI", "AI Generated"];
+      
+      await this.eagleService.sendImageToEagle(base64data, imageName, parameters, tags, settings.eagleFolder);
+
+      this.taskManager.updateTaskStatus(taskId, 'completed', 100);
+      chrome.tabs.sendMessage(tabId, { action: "transferComplete", taskId });
+      this.debug.endTimer("imageTransfer");
+    } catch (error) {
+      this.debug.error(`Image transfer failed for task ${taskId}`, error);
+      this.taskManager.updateTaskStatus(taskId, 'error', 0, error.message);
+      chrome.tabs.sendMessage(tabId, { action: "transferError", taskId, error: error.message });
+    }
+  }
+
+  async fetchBlob(imageData) {
+    this.debug.startTimer("fetchBlob");
+    try {
+      const response = await fetch(imageData);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      this.debug.endTimer("fetchBlob");
+      return await response.blob();
+    } catch (error) {
+      this.debug.error("Error fetching blob", error);
+      throw error;
+    }
+  }
+
+  blobToBase64(blob) {
+    this.debug.startTimer("blobToBase64");
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        this.debug.endTimer("blobToBase64");
+        resolve(reader.result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+}
+
+self.ImageTransferService = ImageTransferService;
+===== FILE_END: image-transfer-service.js =====
+
+===== FILE_START: task-manager.js =====
+FILE_TYPE: javascript
+class TaskManager {
+  constructor(debug) {
+    this.debug = debug;
+    this.tasks = new Map();
+  }
+
+  createTask() {
+    const taskId = Date.now().toString();
+    this.tasks.set(taskId, { status: 'pending', progress: 0 });
+    this.debug.log(`Task created: ${taskId}`);
+    return taskId;
+  }
+
+  updateTaskStatus(taskId, status, progress, error = null) {
+    if (this.tasks.has(taskId)) {
+      this.tasks.set(taskId, { status, progress, error });
+      this.debug.log(`Task ${taskId} updated`, { status, progress, error });
+    } else {
+      this.debug.error(`Task ${taskId} not found`);
+    }
+  }
+
+  getTaskStatus(taskId) {
+    if (this.tasks.has(taskId)) {
+      return this.tasks.get(taskId);
+    } else {
+      this.debug.error(`Task ${taskId} not found`);
+      return null;
+    }
+  }
+}
+
+self.TaskManager = TaskManager;
+===== FILE_END: task-manager.js =====
+

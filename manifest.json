@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "downloads"
   ],
   "host_permissions": [
     "https://novelai.net/*",
