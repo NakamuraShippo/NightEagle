@@ -177,27 +177,32 @@ function handleNewImage(imgNode) {
  */
 function sendMessageToBackground(message) {
   return new Promise((resolve, reject) => {
-    const sendMessageWithRetry = (retryCount = 0) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn(
-            "NightEagle: Error sending message to background",
-            chrome.runtime.lastError
-          );
-          if (retryCount < 3) {
-            setTimeout(() => sendMessageWithRetry(retryCount + 1), 1000);
+    const attemptSend = (retryCount = 0) => {
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            console.warn("Error sending message, retrying:", chrome.runtime.lastError.message);
+            if (retryCount < 3) {
+              setTimeout(() => attemptSend(retryCount + 1), 1000);
+            } else {
+              reject(new Error(chrome.runtime.lastError.message));
+            }
           } else {
-            reject(chrome.runtime.lastError);
+            resolve(response);
           }
+        });
+      } catch (e) {
+        if (retryCount < 3) {
+          setTimeout(() => attemptSend(retryCount + 1), 1000);
         } else {
-          console.log("NightEagle: Received response from background", response);
-          resolve(response);
+          reject(e);
         }
-      });
+      }
     };
-    sendMessageWithRetry();
+    attemptSend();
   });
 }
+
 
 // Background → Content のレスポンス受信
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -208,6 +213,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       `NightEagle: Image transfer failed for task ${message.taskId}`,
       message.error
     );
+  }
+});
+
+// プロンプトペースト機能
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "pastePrompt") {
+    // NovelAIのプロンプト入力欄は、複数のdiv.ProseMirrorとして存在する想定です。
+    // 1番目がポジティブプロンプト、2番目がネガティブプロンプトと仮定します。
+    const prompters = document.querySelectorAll('div.ProseMirror');
+    if (message.promptType === "positive") {
+      if (prompters.length > 0) {
+        const positiveElement = prompters[0].querySelector('p');
+        if (positiveElement) {
+          positiveElement.textContent = message.promptText;
+          positiveElement.dispatchEvent(new Event('input', { bubbles: true }));
+          positiveElement.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          console.error("Positive prompt <p> element not found.");
+        }
+      } else {
+        console.error("Positive prompt container not found.");
+      }
+    } else if (message.promptType === "negative") {
+      if (prompters.length > 1) {
+        const negativeElement = prompters[1].querySelector('p');
+        if (negativeElement) {
+          negativeElement.textContent = message.promptText;
+          negativeElement.dispatchEvent(new Event('input', { bubbles: true }));
+          negativeElement.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          console.error("Negative prompt <p> element not found.");
+        }
+      } else {
+        console.error("Negative prompt container not found.");
+      }
+    }
   }
 });
 
