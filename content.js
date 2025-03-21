@@ -103,7 +103,7 @@ class ParameterExtractor {
     // --- 1) Positive / Negative Prompt ---
     // sc-249c7a4e-45 iNKDqU のなかにある <div class="ProseMirror"><p>...</p></div> を全部取得
     const promptParagraphs = document.querySelectorAll(
-      "div.sc-249c7a4e-45.iNKDqU div.ProseMirror p"
+      "div.sc-689ac2c0-45.dzQkeH div.ProseMirror p"
     );
 
     // 先頭を Positive Prompt として取得
@@ -122,19 +122,19 @@ class ParameterExtractor {
 
     // --- 2) Steps の抽出 ---
     const stepsElement = document.querySelector(
-      "div.sc-b995de7a-9.frBJXL input[step='1']"
+      "div.sc-9453fde5-9.eCywvm input[step='1']"
     );
     parameters.steps = stepsElement ? stepsElement.value : "N/A";
 
     // --- 3) CFG の抽出 ---
     const cfgElement = document.querySelector(
-      "div.sc-b995de7a-9.frBJXL input[step='0.1']"
+      "div.sc-689ac2c0-15.fsbjSe input[step='0.1']"
     );
     parameters.cfg = cfgElement ? cfgElement.value : "N/A";
 
     // --- 4) Seed の抽出 ---
     const seedElement = document.querySelector(
-      "div.sc-249c7a4e-55.hXTjgY span span:first-child"
+      "div.sc-689ac2c0-55.jEjKpP span span:first-child"
     );
     parameters.seed = seedElement ? seedElement.textContent.trim() : "N/A";
 
