@@ -178,12 +178,29 @@ function handleNewImage(imgNode) {
 function sendMessageToBackground(message) {
   return new Promise((resolve, reject) => {
     const sendMessageWithRetry = (retryCount = 0) => {
+      if (!chrome.runtime || !chrome.runtime.id) {
+        // contextが完全に失われている場合
+        const err = new Error("Extension context is not available. Please reload the extension or this page.");
+        console.error("NightEagle:", err);
+        alert("NightEagle: 拡張機能の通信コンテキストが無効です。拡張機能またはページをリロードしてください。");
+        reject(err);
+        return;
+      }
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
           console.warn(
             "NightEagle: Error sending message to background",
             chrome.runtime.lastError
           );
+          // Extension context invalidated の場合はリトライせず諦める
+          if (
+            chrome.runtime.lastError.message &&
+            chrome.runtime.lastError.message.includes("Extension context invalidated")
+          ) {
+            alert("NightEagle: 拡張機能の通信コンテキストが無効です。拡張機能またはページをリロードしてください。");
+            reject(chrome.runtime.lastError);
+            return;
+          }
           if (retryCount < 3) {
             setTimeout(() => sendMessageWithRetry(retryCount + 1), 1000);
           } else {
