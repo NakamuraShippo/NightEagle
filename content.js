@@ -3,33 +3,6 @@ console.log("NightEagle: Content script starting");
 let imageDetector;
 let parameterExtractor;
 
-// let config = null;
-// const CONFIG_URL = 'https://raw.githubusercontent.com/NakamuraShippo/nighteagle/main/config.json';
-
-// async function loadConfig() {
-//   try {
-//     const response = await fetch(CONFIG_URL);
-//     if (!response.ok) {
-//       throw new Error(`HTTP error! status: ${response.status}`);
-//     }
-//     config = await response.json();
-//     console.log("NightEagle: Configuration loaded", config);
-//     initializeAfterConfig();
-//   } catch (error) {
-//     console.error("NightEagle: Error loading configuration", error);
-//   }
-// }
-
-// function initializeAfterConfig() {
-//   imageDetector = new ImageDetector();
-//   parameterExtractor = new ParameterExtractor();
-//   imageDetector.onNewImage(handleNewImage);
-//   console.log("NightEagle: Components initialized with config");
-// }
-
-/* --------------------------------------------------
- *  2) config.json を使わないなら、ハードコーディングorデフォルトの処理
- * -------------------------------------------------- */
 function initialize() {
   imageDetector = new ImageDetector();
   parameterExtractor = new ParameterExtractor();
@@ -53,7 +26,6 @@ class ImageDetector {
 
   startObserving() {
     console.log("NightEagle: Starting image observation");
-    // blob画像をsrcに持つ <img> の追加 or src属性変更を監視
     const observerConfig = {
       childList: true,
       subtree: true,
@@ -73,7 +45,6 @@ class ImageDetector {
         const nodes =
           mutation.type === "childList" ? mutation.addedNodes : [mutation.target];
         nodes.forEach((node) => {
-          // img要素かつ srcが "blob:" で始まる
           if (
             node.nodeType === Node.ELEMENT_NODE &&
             node.tagName === "IMG" &&
@@ -82,7 +53,11 @@ class ImageDetector {
           ) {
             console.log("NightEagle: New image found", node.src);
             this.processedImages.add(node.src);
-            this.callbacks.forEach((callback) => callback(node));
+            
+            // 画像が見つかったら、パラメーターが揃うまで少し待つ
+            setTimeout(() => {
+              this.callbacks.forEach((callback) => callback(node));
+            }, 1000);
           }
         });
       }
@@ -91,85 +66,268 @@ class ImageDetector {
 }
 
 /**
- * パラメータ抽出用クラス
+ * パラメータ抽出用クラス - セレクターIDに依存しない方法で取得
  */
 class ParameterExtractor {
+  constructor() {
+    // シード値が表示されるのを監視
+    this.observeSeedValue();
+  }
+
+  observeSeedValue() {
+    const observer = new MutationObserver(() => {
+      // シード値の要素を探す
+      const seedElements = document.querySelectorAll('span');
+      seedElements.forEach(el => {
+        const text = el.textContent.trim();
+        // 10桁の数字のみの場合、シード値の可能性が高い
+        if (/^\d{10}$/.test(text) && el.style.visibility !== 'hidden') {
+          this.lastSeedValue = text;
+        }
+      });
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  }
+
   /**
    * 各パラメーターをオブジェクトとして抽出する
    */
   extractParameters() {
     const parameters = {};
 
-    // --- 1) Positive / Negative Prompt ---
-    // sc-249c7a4e-45 iNKDqU のなかにある <div class="ProseMirror"><p>...</p></div> を全部取得
-    const promptParagraphs = document.querySelectorAll(
-      "div.sc-689ac2c0-45.dzQkeH div.ProseMirror p"
-    );
+    try {
+      // --- 1) Positive / Negative Prompt ---
+      // ProseMirrorクラスを持つ要素を探す（より安定した方法）
+      const proseMirrorElements = document.querySelectorAll('.ProseMirror');
+      const promptTexts = [];
+      
+      proseMirrorElements.forEach(el => {
+        const text = el.textContent.trim();
+        if (text && text.length > 0) {
+          promptTexts.push(text);
+        }
+      });
 
-    // 先頭を Positive Prompt として取得
-    if (promptParagraphs.length > 0) {
-      parameters.positivePrompt = promptParagraphs[0].textContent.trim();
-    } else {
-      parameters.positivePrompt = "N/A";
-    }
+      // 通常、最初のProseMirrorがPositive Prompt、2番目がNegative Prompt
+      parameters.positivePrompt = promptTexts[0] || this.extractPromptAlternative('positive') || "N/A";
+      parameters.negativePrompt = promptTexts[1] || this.extractPromptAlternative('negative') || "N/A";
 
-    // 2番目を Negative Prompt として取得
-    if (promptParagraphs.length > 1) {
-      parameters.negativePrompt = promptParagraphs[1].textContent.trim();
-    } else {
-      parameters.negativePrompt = "N/A";
-    }
+      // --- 2) Steps の抽出 ---
+      parameters.steps = this.extractSteps() || "N/A";
 
-    // --- 2) Steps の抽出 ---
-    const stepsElement = document.querySelector(
-      "div.sc-9453fde5-9.eCywvm input[step='1']"
-    );
-    parameters.steps = stepsElement ? stepsElement.value : "N/A";
+      // --- 3) CFG の抽出 ---
+      parameters.cfg = this.extractCFG() || "N/A";
 
-    // --- 3) CFG の抽出 ---
-    const cfgElement = document.querySelector(
-      "div.sc-689ac2c0-15.fsbjSe input[step='0.1']"
-    );
-    parameters.cfg = cfgElement ? cfgElement.value : "N/A";
+      // --- 4) Seed の抽出 ---
+      parameters.seed = this.extractSeed() || "N/A";
 
-    // --- 4) Seed の抽出 ---
-    const seedElement = document.querySelector(
-      "div.sc-689ac2c0-55.jEjKpP span span:first-child"
-    );
-    parameters.seed = seedElement ? seedElement.textContent.trim() : "N/A";
+      // --- 5) Sampler の抽出 ---
+      parameters.sampler = this.extractSampler() || "N/A";
 
-    // --- 5) Sampler の抽出 ---
-    // aria-label="Select a sampler" を使うなど、構造に合わせて調整してください
-    const samplerInput = document.querySelector('input[aria-label="Select a sampler"]');
-    if (samplerInput) {
-      const samplerContainer = samplerInput.closest('.css-19sbopf-control');
-      const samplerEl = samplerContainer?.querySelector('.css-4t5j3y-singleValue');
-      parameters.sampler = samplerEl ? samplerEl.textContent.trim() : "N/A";
-    } else {
-      parameters.sampler = "N/A";
+    } catch (error) {
+      console.error("NightEagle: Error extracting parameters", error);
     }
 
     console.log("NightEagle: Extracted parameters", parameters);
     return parameters;
   }
-}
 
+  // 代替のプロンプト取得方法
+  extractPromptAlternative(type) {
+    try {
+      // contenteditable="true" を持つdivを探す
+      const editableElements = document.querySelectorAll('div[contenteditable="true"]');
+      const prompts = [];
+      
+      editableElements.forEach(el => {
+        const proseMirror = el.querySelector('.ProseMirror');
+        if (proseMirror) {
+          const text = proseMirror.textContent.trim();
+          if (text) prompts.push(text);
+        }
+      });
+
+      if (type === 'positive' && prompts[0]) return prompts[0];
+      if (type === 'negative' && prompts[1]) return prompts[1];
+    } catch (error) {
+      console.error("NightEagle: Error in extractPromptAlternative", error);
+    }
+    return null;
+  }
+
+  // Steps の抽出
+  extractSteps() {
+    try {
+      // step="1" を持つinput要素を探す
+      const stepsInput = document.querySelector('input[step="1"][type="number"]');
+      if (stepsInput) return stepsInput.value;
+
+      // 代替方法: ステップというテキストの近くにあるinput要素
+      const allSpans = document.querySelectorAll('span');
+      for (let span of allSpans) {
+        if (span.textContent === 'ステップ') {
+          const container = span.closest('div');
+          if (container) {
+            const input = container.querySelector('input[type="number"]');
+            if (input) return input.value;
+          }
+        }
+      }
+    } catch (error) {
+      console.error("NightEagle: Error extracting steps", error);
+    }
+    return null;
+  }
+
+  // CFG の抽出
+  extractCFG() {
+    try {
+      // step="0.1" を持つinput要素を探す
+      const cfgInput = document.querySelector('input[step="0.1"][type="number"]');
+      if (cfgInput) return cfgInput.value;
+
+      // 代替方法: 正確度というテキストの近くにあるinput要素
+      const allSpans = document.querySelectorAll('span');
+      for (let span of allSpans) {
+        if (span.textContent === '正確度') {
+          const container = span.closest('div');
+          if (container) {
+            const input = container.querySelector('input[type="number"]');
+            if (input) return input.value;
+          }
+        }
+      }
+    } catch (error) {
+      console.error("NightEagle: Error extracting CFG", error);
+    }
+    return null;
+  }
+
+  // Seed の抽出
+  extractSeed() {
+    try {
+      // 最後に観測されたシード値を使用
+      if (this.lastSeedValue) return this.lastSeedValue;
+
+      // 10桁の数字のみを含むspan要素を探す
+      const allSpans = document.querySelectorAll('span');
+      for (let span of allSpans) {
+        const text = span.textContent.trim();
+        if (/^\d{10}$/.test(text) && span.style.visibility !== 'hidden') {
+          return text;
+        }
+      }
+
+      // 代替方法: シード値というテキストの近くにある数字
+      for (let span of allSpans) {
+        if (span.textContent === 'シード値') {
+          const container = span.closest('div');
+          if (container) {
+            const nextDiv = container.nextElementSibling;
+            if (nextDiv) {
+              const seedSpan = nextDiv.querySelector('span');
+              if (seedSpan && /^\d+$/.test(seedSpan.textContent.trim())) {
+                return seedSpan.textContent.trim();
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("NightEagle: Error extracting seed", error);
+    }
+    return null;
+  }
+
+  // Sampler の抽出
+  extractSampler() {
+    try {
+      // サンプラーというテキストの近くにあるボタンのテキスト
+      const allSpans = document.querySelectorAll('span');
+      for (let span of allSpans) {
+        if (span.textContent === 'サンプラー') {
+          const container = span.closest('div');
+          if (container) {
+            const button = container.querySelector('button span');
+            if (button) return button.textContent.trim();
+          }
+        }
+      }
+
+      // 代替方法: Select a samplerというaria-labelを持つinput要素の近くを探す
+      const samplerInput = document.querySelector('input[aria-label="Select a sampler"]');
+      if (samplerInput) {
+        const container = samplerInput.closest('div[class*="control"]');
+        if (container) {
+          const valueEl = container.querySelector('div[class*="singleValue"]');
+          if (valueEl) return valueEl.textContent.trim();
+        }
+      }
+
+      // さらに代替: Euler Ancestralなどのサンプラー名を直接探す
+      const samplerNames = ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ SDE', 'DPM++ 2M SDE'];
+      for (let button of document.querySelectorAll('button span')) {
+        const text = button.textContent.trim();
+        if (samplerNames.includes(text)) {
+          return text;
+        }
+      }
+    } catch (error) {
+      console.error("NightEagle: Error extracting sampler", error);
+    }
+    return null;
+  }
+}
 
 /**
  * 新規画像が見つかったときの処理
  */
 function handleNewImage(imgNode) {
   console.log("NightEagle: Handling new image", imgNode.src);
-  const parameters = parameterExtractor.extractParameters();
   
-  sendMessageToBackground({
-    action: "startImageTransfer",
-    imageData: imgNode.src,
-    imageName: `NovelAI_${new Date().toISOString()}.png`,
-    parameters: parameters
-  }).catch((error) =>
-    console.error("NightEagle: Error in handleNewImage", error)
-  );
+  // パラメーター抽出を複数回試行（シード値などが遅れて表示される場合があるため）
+  let attempts = 0;
+  const maxAttempts = 5;
+  
+  const tryExtractAndSend = () => {
+    attempts++;
+    const parameters = parameterExtractor.extractParameters();
+    
+    // 重要なパラメーターが取得できているか確認
+    const hasEssentialParams = parameters.positivePrompt !== "N/A" || parameters.seed !== "N/A";
+    
+    if (!hasEssentialParams && attempts < maxAttempts) {
+      // まだ重要なパラメーターが取得できていない場合は再試行
+      setTimeout(tryExtractAndSend, 1000);
+      return;
+    }
+    
+    // 画像をBase64に変換してから送信
+    fetch(imgNode.src)
+      .then(response => response.blob())
+      .then(blob => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          sendMessageToBackground({
+            action: "startImageTransfer",
+            imageData: reader.result,
+            imageName: `NovelAI_${new Date().toISOString()}.png`,
+            parameters: parameters
+          }).catch((error) =>
+            console.error("NightEagle: Error in handleNewImage", error)
+          );
+        };
+        reader.readAsDataURL(blob);
+      })
+      .catch(error => console.error("NightEagle: Error converting blob to base64", error));
+  };
+  
+  tryExtractAndSend();
 }
 
 /**
@@ -211,13 +369,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-/* --------------------------------------------------
- * 実行開始
- * -------------------------------------------------- */
-// （リモートのconfig.jsonを使わないならこのまま呼び出す）
+// 実行開始
 initialize();
-
-// （リモートのconfig.jsonを使いたい場合は、以下をアンコメント）
-// loadConfig();
 
 console.log("NightEagle: Content script setup complete");

@@ -8,18 +8,12 @@ class ImageTransferService {
   async handleImageTransfer(imageData, imageName, parameters, taskId, tabId) {
     try {
       this.debug.log(`Starting image transfer for task ${taskId}`);
-      this.taskManager.updateTaskStatus(taskId, 'fetching', 10);
-      const blob = await this.fetchBlob(imageData);
-
-      this.taskManager.updateTaskStatus(taskId, 'converting', 30);
-      const base64data = await this.blobToBase64(blob);
-
       this.taskManager.updateTaskStatus(taskId, 'sending', 50);
       
       const settings = await chrome.storage.sync.get(['eagleFolder', 'allTags']);
       const tags = settings.allTags ? settings.allTags.split(',').map(tag => tag.trim()) : ["NovelAI", "AI Generated"];
       
-      await this.eagleService.sendImageToEagle(base64data, imageName, parameters, tags, settings.eagleFolder);
+      await this.eagleService.sendImageToEagle(imageData, imageName, parameters, tags, settings.eagleFolder);
 
       this.taskManager.updateTaskStatus(taskId, 'completed', 100);
       chrome.tabs.sendMessage(tabId, { action: "transferComplete", taskId });
