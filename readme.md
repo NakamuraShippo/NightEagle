@@ -62,5 +62,9 @@ NightEagleは、NovelAIで生成された画像を自動的にEagleに転送す�
 この拡張機能は、NovelAIおよびEagleと直接の関連はありません。使用に伴うリスクはユーザーが負うものとします。
 
 ## アップデート予定
-
 - 未定
+
+## NakamuraShippo
+X        : [@nakamurashippo](https://x.com/Nakamurashippo)
+
+[![支援をお願いします](https://github.com/NakamuraShippo/Hatstand/blob/main/assets/sponsor_logo.png)](https://www.patreon.com/cw/NakamuraShippo)
